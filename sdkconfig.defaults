@@ -1,0 +1,11 @@
+# --- Flash: 16 MB on this board ---------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# --- Logging ----------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# Route logs to native ESP32 port
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# Route logs to USB port
+#CONFIG_ESP_CONSOLE_UART_DEFAULT=y

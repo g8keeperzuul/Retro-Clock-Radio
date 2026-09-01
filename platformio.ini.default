@@ -1,0 +1,86 @@
+; PlatformIO Project Configuration File
+;
+; ESP32-S3 N16 
+;
+;   pio run -t upload -t monitor
+;
+; https://docs.platformio.org/page/projectconf.html
+
+[env:freenove_esp32_s3_wroom]
+platform = espressif32 @ ^6.6.0
+board = freenove_esp32_s3_wroom
+framework = espidf
+; The board manifest assumes 8 MB; this board actually has 16 MB.
+board_upload.flash_size = 16MB
+board_upload.maximum_size = 16777216
+;board_build.partitions = partitions.csv
+
+; Explicit port and upload speed
+
+; ESP32 native port
+;upload_port = /dev/ttyACM1
+upload_speed = 115200
+;monitor_port = /dev/ttyACM1
+monitor_speed = 115200
+
+; USB port
+
+; CRITICAL: This prevents the CH343 from hanging the ESP32 in reset
+; ONLY use when connected to USB port, NOT native port
+;monitor_dtr = 1
+;monitor_rts = 1
+
+;monitor_filters = esp32_exception_decoder, direct
+;monitor_filters = esp_idf_exception_decoder, direct
+
+; Remove filters to see raw bootloader and crash logs
+monitor_filters = direct
+
+; ---------------------------------------------------------------------------
+; Compile-time configuration
+;
+; Wi-Fi credentials and connection tuning are injected as preprocessor macros
+; so nothing is hard-coded in the sources. Edit the two CHANGE_ME values below.
+;
+; To keep credentials out of version control instead, leave these commented and
+; export them at build time:
+;   export PLATFORMIO_BUILD_FLAGS='-D WIFI_SSID=\"my-ssid\" -D WIFI_PASSWORD=\"my-pass\"'
+; ---------------------------------------------------------------------------
+build_flags =
+    ; Network to join. Quotes must be escaped so they survive to the compiler.
+    -D WIFI_SSID=\"wifi SSID\"
+    -D WIFI_PASSWORD=\"wifi password\"
+
+    ; Name requested from the DHCP server.
+    -D WIFI_HOSTNAME=\"retro-clock-radio\"
+
+    ; Weakest acceptable AP security (wifi_auth_mode_t). Use WIFI_AUTH_OPEN for
+    ; an unsecured network, WIFI_AUTH_WPA3_PSK to require WPA3.
+    -D WIFI_AUTH_THRESHOLD=WIFI_AUTH_WPA2_PSK
+
+    ; Association attempts before app_main() reboots the board; 0 = retry forever.
+    -D WIFI_CONNECT_MAX_RETRY=0
+
+    ; Per-attempt deadline for association + DHCP.
+    -D WIFI_CONNECT_TIMEOUT_MS=15000
+
+    ; Exponential backoff bounds between attempts.
+    -D WIFI_CONNECT_BACKOFF_MIN_MS=1000
+    -D WIFI_CONNECT_BACKOFF_MAX_MS=30000
+
+    ; Silent pause at the top of app_main(), long enough to attach a serial
+    ; monitor before the first log line. Set to 0 to boot straight through.
+    -D BOOT_LOG_DELAY_MS=5000
+
+; Enable core debug output to see early boot logs
+;    -D CORE_DEBUG_LEVEL=5
+
+; Reset method for ESP32-S3 internal USB-Serial/JTAG
+upload_flags =
+    --before=default_reset
+    --after=hard_reset
+    --no-stub
+
+
+
+
