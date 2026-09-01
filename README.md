@@ -8,12 +8,13 @@
 | [Rotary Encoder](https://www.adafruit.com/product/5880) | Adafruit I2C Stemma QT Rotary Encoder Breakout with Encoder - STEMMA QT / Qwiic |
 
 ## Firmware Status
-Bootstraps the ESP32-S3 (NVS, TCP/IP stack, default event loop) and joins a
-Wi-Fi network as a station. The e-paper display and rotary encoder are not
-driven yet.
+Bootstraps the ESP32-S3 (NVS, TCP/IP stack, default event loop), joins a Wi-Fi
+network as a station, then sets the real-time clock from NTP. The e-paper
+display and rotary encoder are not driven yet.
 
-- [src/main.c](src/main.c) — boot banner, bring-up, link-health heartbeat
+- [src/main.c](src/main.c) — boot banner, bring-up, link/clock heartbeat
 - [src/wifi_sta.c](src/wifi_sta.c) — station bring-up, retry/backoff, auto-reconnect
+- [src/time_sync.c](src/time_sync.c) — SNTP client, timezone, background re-sync
 
 ## Configuration
 Wi-Fi credentials and connection tuning are compile-time parameters, defined as
@@ -31,6 +32,10 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `WIFI_CONNECT_BACKOFF_MIN_MS` | `1000` | Initial delay between attempts |
 | `WIFI_CONNECT_BACKOFF_MAX_MS` | `30000` | Backoff ceiling |
 | `BOOT_LOG_DELAY_MS` | `5000` | Silent pause before the first log line |
+| `NTP_SERVER` | `pool.ntp.org` | NTP server used to set the clock |
+| `TIME_ZONE` | `EST5EDT,M3.2.0,M11.1.0` | Local timezone as a POSIX TZ string |
+| `NTP_SYNC_TIMEOUT_MS` | `30000` | Wait for the first NTP response before continuing |
+| `NTP_SYNC_INTERVAL_MS` | `3600000` | Interval between background re-syncs |
 
 Omitting `WIFI_SSID` or `WIFI_PASSWORD` fails the build with an `#error` rather
 than silently producing firmware that cannot connect.

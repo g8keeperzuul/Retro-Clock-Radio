@@ -6,10 +6,11 @@
  *   - Waveshare 5.83" e-paper display, 648x480, SPI  (not driven yet)
  *   - Adafruit I2C STEMMA QT rotary encoder breakout  (not driven yet)
  *
- * This stage only bootstraps the microcontroller and joins the Wi-Fi network
- * configured in platformio.ini.
+ * This stage bootstraps the microcontroller, joins the Wi-Fi network configured
+ * in platformio.ini, and sets the real-time clock from NTP.
  */
 #include <inttypes.h>
+#include <stdio.h>
 
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
@@ -23,6 +24,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "time_sync.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "main";
@@ -63,18 +65,23 @@ static void log_boot_banner(void)
 
 static void log_link_status(void)
 {
+    char stamp[48];
+    if (!time_sync_is_valid() || time_sync_format_local(stamp, sizeof(stamp)) == 0) {
+        snprintf(stamp, sizeof(stamp), "clock not set");
+    }
+
     if (!wifi_sta_is_connected()) {
-        ESP_LOGW(TAG, "offline (last disconnect reason %u), free heap %" PRIu32,
-                 wifi_sta_last_disconnect_reason(), esp_get_free_heap_size());
+        ESP_LOGW(TAG, "%s | offline (last disconnect reason %u), free heap %" PRIu32,
+                 stamp, wifi_sta_last_disconnect_reason(), esp_get_free_heap_size());
         return;
     }
 
     wifi_ap_record_t ap;
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-        ESP_LOGI(TAG, "online: rssi %d dBm, channel %u, free heap %" PRIu32,
-                 ap.rssi, ap.primary, esp_get_free_heap_size());
+        ESP_LOGI(TAG, "%s | online: rssi %d dBm, channel %u, free heap %" PRIu32,
+                 stamp, ap.rssi, ap.primary, esp_get_free_heap_size());
     } else {
-        ESP_LOGI(TAG, "online, free heap %" PRIu32, esp_get_free_heap_size());
+        ESP_LOGI(TAG, "%s | online, free heap %" PRIu32, stamp, esp_get_free_heap_size());
     }
 }
 
@@ -97,7 +104,17 @@ void app_main(void)
         esp_restart();
     }
 
-    ESP_LOGI(TAG, "network is up; e-paper display and rotary encoder come next");
+    /*
+     * Set the real-time clock from NTP. A timeout here is not fatal -- the SNTP
+     * client keeps retrying in the background, and log_link_status() reports
+     * whether the clock has been set yet.
+     */
+    ESP_ERROR_CHECK(time_sync_start());
+    if (time_sync_wait() != ESP_OK) {
+        ESP_LOGW(TAG, "starting up with an unset clock");
+    }
+
+    ESP_LOGI(TAG, "network and clock are up; e-paper display and rotary encoder come next");
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(STATUS_INTERVAL_MS));
