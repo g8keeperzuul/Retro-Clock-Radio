@@ -61,6 +61,9 @@ build_flags =
     ; Association attempts before app_main() reboots the board; 0 = retry forever.
     -D WIFI_CONNECT_MAX_RETRY=0
 
+    ; If no wifi connection is established after MAX_RETRY attempts, then either reboot (1) or skip (0)
+    -D WIFI_CONNECT_RESTART_ON_FAIL=0    
+
     ; Per-attempt deadline for association + DHCP.
     -D WIFI_CONNECT_TIMEOUT_MS=15000
 
@@ -71,6 +74,27 @@ build_flags =
     ; Silent pause at the top of app_main(), long enough to attach a serial
     ; monitor before the first log line. Set to 0 to boot straight through.
     -D BOOT_LOG_DELAY_MS=5000
+
+    ; --- Real-time clock ---------------------------------------------------
+    ; NTP server used to set the clock. This build has one server slot
+    ; (CONFIG_LWIP_SNTP_MAX_SERVERS=1); pool.ntp.org rotates hosts on each
+    ; DNS lookup, so one slot still spreads load and survives a dead host.
+    -D NTP_SERVER=\"pool.ntp.org\"
+
+    ; Local timezone as a POSIX TZ string, including DST rules. Examples:
+    ;   UTC0
+    ;   EST5EDT,M3.2.0,M11.1.0   (US/Canada Eastern)
+    ;   CST6CDT,M3.2.0,M11.1.0   (US/Canada Central)
+    ;   PST8PDT,M3.2.0,M11.1.0   (US/Canada Pacific)
+    ;   CET-1CEST,M3.5.0,M10.5.0/3  (Central Europe)
+    -D TIME_ZONE=\"EST5EDT,M3.2.0,M11.1.0\"
+
+    ; How long app_main() waits for the first NTP response before carrying on.
+    ; Not fatal: the client keeps retrying in the background.
+    -D NTP_SYNC_TIMEOUT_MS=30000
+
+    ; Interval between background re-syncs.
+    -D NTP_SYNC_INTERVAL_MS=3600000
 
 ; Enable core debug output to see early boot logs
 ;    -D CORE_DEBUG_LEVEL=5

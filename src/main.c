@@ -94,27 +94,30 @@ void app_main(void)
 
     ESP_ERROR_CHECK(wifi_sta_init());
 
-    if (wifi_sta_connect() != ESP_OK) {
+    if (wifi_sta_connect() == ESP_OK) {
         /*
-         * Only reachable when WIFI_CONNECT_MAX_RETRY is non-zero. There is
-         * nothing useful a clock-radio can do without a network time source,
-         * so restart and let the retry budget begin again from a clean state.
+        * Set the real-time clock from NTP. A timeout here is not fatal -- the SNTP
+        * client keeps retrying in the background, and log_link_status() reports
+        * whether the clock has been set yet.
+        */
+        ESP_ERROR_CHECK(time_sync_start());
+        if (time_sync_wait() != ESP_OK) {
+            ESP_LOGW(TAG, "starting up with an unset clock");
+        }
+
+        ESP_LOGI(TAG, "network joined and clock synced");
+    } else {
+        /*
+         * Only reachable when WIFI_CONNECT_MAX_RETRY is non-zero. 
          */
-        ESP_LOGE(TAG, "could not join the network, restarting");
-        esp_restart();
+        ESP_LOGW(TAG, "could not join the network");
+        
+        if (WIFI_CONNECT_RESTART_ON_FAIL) {
+            ESP_LOGE(TAG, "restarting");
+            esp_restart();
+        }
+        /* else treat lack of wifi connection as non-fatal */
     }
-
-    /*
-     * Set the real-time clock from NTP. A timeout here is not fatal -- the SNTP
-     * client keeps retrying in the background, and log_link_status() reports
-     * whether the clock has been set yet.
-     */
-    ESP_ERROR_CHECK(time_sync_start());
-    if (time_sync_wait() != ESP_OK) {
-        ESP_LOGW(TAG, "starting up with an unset clock");
-    }
-
-    ESP_LOGI(TAG, "network and clock are up; e-paper display and rotary encoder come next");
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(STATUS_INTERVAL_MS));
