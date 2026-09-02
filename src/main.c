@@ -6,7 +6,7 @@
  *   - Waveshare 5.83" e-paper (G) display, 648x480, four colour, SPI
  *   - Adafruit I2C STEMMA QT rotary encoder breakout  (not driven yet)
  *
- * This stage bootstraps the microcontroller, puts a test pattern on the e-paper
+ * This stage bootstraps the microcontroller, puts the clock face on the e-paper
  * panel, joins the Wi-Fi network configured in platformio.ini, and sets the
  * real-time clock from NTP.
  */
@@ -26,6 +26,7 @@
 #include "freertos/task.h"
 
 #include "epd_5in83g.h"
+#include "epd_clockface.h"
 #include "epd_pattern.h"
 #include "time_sync.h"
 #include "wifi_sta.h"
@@ -102,7 +103,8 @@ void app_main(void)
      */
     esp_err_t epd_err = epd_init();
     if (epd_err == ESP_OK) {
-        epd_err = epd_pattern_show();
+        /* Swap in epd_pattern_show() to put the bring-up test pattern up instead. */
+        epd_err = epd_clockface_show();
     }
     if (epd_err != ESP_OK) {
         ESP_LOGE(TAG, "e-paper display unavailable: %s", esp_err_to_name(epd_err));

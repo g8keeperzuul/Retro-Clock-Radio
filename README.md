@@ -18,7 +18,8 @@ driven yet.
 - [src/time_sync.c](src/time_sync.c) — SNTP client, timezone, background re-sync
 - [src/epd_5in83g.c](src/epd_5in83g.c) — e-paper panel driver over SPI
 - [src/epd_paint.c](src/epd_paint.c) — frame buffer shapes and a built-in 5x7 font
-- [src/epd_pattern.c](src/epd_pattern.c) — the boot-time test pattern
+- [src/epd_pattern.c](src/epd_pattern.c) — the bring-up test pattern
+- [src/epd_clockface.c](src/epd_clockface.c) — the analog clock face
 
 ## Display
 The panel is a Waveshare 5.83" e-Paper (G): 648 x 480, four inks
@@ -42,8 +43,10 @@ box* — (0,0) is its top-left, not the panel's — and clip to it, so the dead
 margin can only ever carry the `paint_clear()` colour. Layout code works in the
 box and never has to know about the rest.
 
-`app_main()` runs the panel first, before Wi-Fi, so a wiring fault surfaces
-immediately rather than behind a network timeout. Neither an init failure nor a
+`app_main()` puts the clock face up first, before Wi-Fi, so a wiring fault
+surfaces immediately rather than behind a network timeout. Swapping the
+`epd_clockface_show()` call for `epd_pattern_show()` boots the test pattern
+instead. Neither an init failure nor a
 BUSY timeout is fatal. A full refresh takes roughly 25 seconds, during which
 `app_main()` blocks.
 
@@ -62,6 +65,15 @@ and readable at a glance:
   `(477,459)` — box coordinates, not the panel's — so a frame that does not sit
   hard against the visible edges, or a strip of white above the top one, means
   the crop is wrong.
+
+### Clock face
+[src/epd_clockface.c](src/epd_clockface.c) draws the dial inspired by
+[docs/pictures/clock-face.png](docs/pictures/clock-face.png): outlined numerals
+outside a two-line chapter ring, an inner minute track with wedges on the fives,
+cross lines running out to the edges.
+
+The dial only — no hour, minute or second hands. Those belong to whatever draws
+the current time over the top.
 
 ### Wiring
 Defaults follow Waveshare's own ESP32-S3 reference wiring. All six are
