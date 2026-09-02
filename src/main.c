@@ -3,11 +3,12 @@
  *
  * Hardware (see README.md "Component List"):
  *   - ESP32-S3-DevKitC-1 v1.1 (N16R8: 16 MB flash, 8 MB PSRAM)
- *   - Waveshare 5.83" e-paper display, 648x480, SPI  (not driven yet)
+ *   - Waveshare 5.83" e-paper (G) display, 648x480, four colour, SPI
  *   - Adafruit I2C STEMMA QT rotary encoder breakout  (not driven yet)
  *
- * This stage bootstraps the microcontroller, joins the Wi-Fi network configured
- * in platformio.ini, and sets the real-time clock from NTP.
+ * This stage bootstraps the microcontroller, puts a test pattern on the e-paper
+ * panel, joins the Wi-Fi network configured in platformio.ini, and sets the
+ * real-time clock from NTP.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -24,6 +25,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "epd_5in83g.h"
+#include "epd_pattern.h"
 #include "time_sync.h"
 #include "wifi_sta.h"
 
@@ -91,6 +94,19 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(BOOT_LOG_DELAY_MS));
 
     log_boot_banner();
+
+    /*
+     * Panel bring-up first: it does not need the network, and a wrong pin map
+     * or a loose ribbon shows up here rather than behind a Wi-Fi timeout.
+     * Neither failure is fatal -- the clock still keeps time without a screen.
+     */
+    esp_err_t epd_err = epd_init();
+    if (epd_err == ESP_OK) {
+        epd_err = epd_pattern_show();
+    }
+    if (epd_err != ESP_OK) {
+        ESP_LOGE(TAG, "e-paper display unavailable: %s", esp_err_to_name(epd_err));
+    }
 
     ESP_ERROR_CHECK(wifi_sta_init());
 

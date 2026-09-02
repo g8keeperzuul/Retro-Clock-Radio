@@ -96,6 +96,31 @@ build_flags =
     ; Interval between background re-syncs.
     -D NTP_SYNC_INTERVAL_MS=3600000
 
+    ; --- e-Paper display ---------------------------------------------------
+    ; Waveshare 5.83" e-Paper (G), 648x480, black/white/yellow/red, 4-wire SPI.
+    ; Defaults match Waveshare's own ESP32-S3 reference wiring; change them to
+    ; match how the panel is actually cabled to the DevKitC header.
+    -D EPD_PIN_SCLK=12
+    -D EPD_PIN_MOSI=11
+    -D EPD_PIN_CS=10
+    -D EPD_PIN_DC=13
+    -D EPD_PIN_RST=14
+    -D EPD_PIN_BUSY=4
+
+    ; Panel power control. This panel's pin-out is nine wires, not eight -- with
+    ; PWR left floating the panel never powers up and reports nothing at all.
+    ; Set to -1 only for an older 8-pin panel that has no PWR pin.
+    -D EPD_PIN_PWR=5
+
+    ; SPI host and clock. SPI2_HOST is the general-purpose host on the S3; the
+    ; panel is rated to 20 MHz, but long ribbons are happier slower.
+    -D EPD_SPI_HOST=SPI2_HOST
+    -D EPD_SPI_SPEED_HZ=10000000
+
+    ; Ceiling on a single BUSY wait. A full four-colour refresh takes ~25 s, so
+    ; this is a wiring diagnostic rather than a deadline.
+    -D EPD_BUSY_TIMEOUT_MS=60000
+
 ; Enable core debug output to see early boot logs
 ;    -D CORE_DEBUG_LEVEL=5
 
