@@ -26,6 +26,24 @@ extern "C" {
 #define EPD_WIDTH  648
 #define EPD_HEIGHT 480
 
+/*
+ * Usable drawing area: the only part of the glass that is visible once the
+ * panel is in its enclosure. It is flush to the panel's left and bottom edges,
+ * so the dead margin is the EPD_WIDTH - EPD_USABLE_WIDTH columns on the right
+ * and the EPD_USABLE_Y rows along the top.
+ *
+ * The paint primitives take coordinates relative to EPD_USABLE_X/Y and clip to
+ * this box, so layout code can treat EPD_USABLE_WIDTH x EPD_USABLE_HEIGHT as
+ * the whole screen. Frame buffers stay full size -- the panel still expects
+ * EPD_ROW_BYTES per row, for all EPD_HEIGHT rows.
+ */
+#define EPD_USABLE_WIDTH  478
+#define EPD_USABLE_HEIGHT 460
+
+/* Top-left corner of the usable box in panel pixels: left- and bottom-aligned. */
+#define EPD_USABLE_X 0
+#define EPD_USABLE_Y (EPD_HEIGHT - EPD_USABLE_HEIGHT)
+
 /* Four pixels per byte. 648 divides evenly, so rows need no padding. */
 #define EPD_ROW_BYTES ((EPD_WIDTH + 3) / 4)
 #define EPD_FB_SIZE   ((size_t)EPD_ROW_BYTES * EPD_HEIGHT)

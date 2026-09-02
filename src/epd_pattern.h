@@ -1,5 +1,6 @@
 /*
- * epd_pattern.h - Four-colour e-paper bring-up test pattern.
+ * epd_pattern.h - Four-colour e-paper bring-up test pattern, laid out inside
+ * the usable EPD_USABLE_WIDTH x EPD_HEIGHT box.
  */
 #pragma once
 

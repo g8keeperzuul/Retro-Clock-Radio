@@ -1,6 +1,12 @@
 /*
  * epd_pattern.c - Four-colour e-paper bring-up test pattern.
  *
+ * Everything is laid out inside the usable box, in the box's own coordinates,
+ * so the pattern doubles as a check that the visible window really is where the
+ * firmware thinks it is: the frame is flush to all four of its sides, and ink
+ * spilling past the right-hand or bottom one -- or a strip of white above the
+ * top one -- would mean the crop is wrong.
+ *
  * The pattern answers three questions at a glance:
  *
  *   1. Do all four inks fire?      Labelled swatches, one per colour code.
@@ -9,10 +15,9 @@
  *                                  edge named. Reading the labels also catches
  *                                  a mirrored scan direction, which a purely
  *                                  symmetric pattern would hide.
- *   3. Is the geometry right?      A frame flush to all four sides plus edge
- *                                  ticks: a row-stride error skews them, an
- *                                  off-by-one in the resolution registers
- *                                  clips them.
+ *   3. Is the geometry right?      The frame plus edge ticks: a row-stride
+ *                                  error skews them, an off-by-one in the
+ *                                  resolution registers clips them.
  */
 #include "epd_pattern.h"
 
@@ -25,18 +30,20 @@
 
 static const char *TAG = "epd-pattern";
 
-#define CENTER_X (EPD_WIDTH / 2)
+/* The pattern's own canvas: the usable box, smaller than the panel on two sides. */
+#define VIEW_W   EPD_USABLE_WIDTH    /* 478 */
+#define VIEW_H   EPD_USABLE_HEIGHT   /* 460 */
+#define CENTER_X (VIEW_W / 2)
 
 #define BORDER    4    /* outer frame thickness */
-#define MARK_SIZE 56   /* corner marker square */
-#define MARK_PAD  14   /* gap from the panel edge to the marker */
+#define MARK_SIZE 48   /* corner marker square */
+#define MARK_PAD  12   /* gap from the usable edge to the marker */
 
-#define MARK_RIGHT (EPD_WIDTH - MARK_PAD - MARK_SIZE)   /* 578 */
-#define MARK_BOT   (EPD_HEIGHT - MARK_PAD - MARK_SIZE)  /* 410 */
+#define MARK_RIGHT (VIEW_W - MARK_PAD - MARK_SIZE)  /* 418 */
+#define MARK_BOT   (VIEW_H - MARK_PAD - MARK_SIZE)  /* 400 */
 
-/* Text sizes: 4 for edge names, 3 for the caption columns, 2 for annotations. */
-#define EDGE_SCALE 4
-#define BODY_SCALE 3
+/* Text sizes: 3 for the edge names and the headline, 2 for everything else. */
+#define EDGE_SCALE 3
 #define NOTE_SCALE 2
 
 static void draw_text_right(uint8_t *fb, int right, int y, const char *text, int scale,
@@ -74,42 +81,62 @@ static void draw_corner_markers(uint8_t *fb)
     paint_fill_rect(fb, MARK_RIGHT + half, MARK_BOT + half, half, half, EPD_RED);
     paint_rect(fb, MARK_RIGHT, MARK_BOT, MARK_SIZE, MARK_SIZE, 3, EPD_BLACK);
 
-    /* Corner names, with the pixel coordinate each marker sits against. */
-    paint_text(fb, MARK_PAD, 76, "TL (0,0)", NOTE_SCALE, EPD_BLACK);
-    draw_text_right(fb, EPD_WIDTH - MARK_PAD, 76, "(647,0) TR", NOTE_SCALE, EPD_BLACK);
-    paint_text(fb, MARK_PAD, 390, "BL (0,479)", NOTE_SCALE, EPD_BLACK);
-    draw_text_right(fb, EPD_WIDTH - MARK_PAD, 390, "(647,479) BR", NOTE_SCALE, EPD_BLACK);
+    /*
+     * Corner names with the usable coordinate each marker sits against -- box
+     * coordinates, so the far corner is (477,459) and not the panel's
+     * (647,479). That is the whole point of the exercise: a marker sitting
+     * anywhere but hard against the label's coordinate means the crop is off.
+     */
+    paint_text(fb, MARK_PAD, 66, "TL (0,0)", NOTE_SCALE, EPD_BLACK);
+    draw_text_right(fb, VIEW_W - MARK_PAD, 66, "(477,0) TR", NOTE_SCALE, EPD_BLACK);
+
+    /* The bottom pair tucks between the markers -- the rows below are full. */
+    paint_text(fb, MARK_PAD + MARK_SIZE + 8, 404, "BL (0,459)", NOTE_SCALE, EPD_BLACK);
+    draw_text_right(fb, MARK_RIGHT - 8, 404, "(477,459) BR", NOTE_SCALE, EPD_BLACK);
 }
 
 /* Name every edge, so a rotated or mirrored scan is obvious from the text. */
 static void draw_edge_labels(uint8_t *fb)
 {
-    paint_text_centered(fb, CENTER_X, 26, "TOP EDGE", EDGE_SCALE, EPD_BLACK);
-    paint_text_centered(fb, CENTER_X, 414, "BOTTOM EDGE", EDGE_SCALE, EPD_BLACK);
+    paint_text_centered(fb, CENTER_X, 20, "TOP EDGE", EDGE_SCALE, EPD_BLACK);
+    paint_text_centered(fb, CENTER_X, 424, "BOTTOM EDGE", EDGE_SCALE, EPD_BLACK);
 
     const int left_h = paint_text_stacked_height("LEFT", EDGE_SCALE);
     const int right_h = paint_text_stacked_height("RIGHT", EDGE_SCALE);
     const int glyph_w = PAINT_FONT_W * EDGE_SCALE;
 
-    paint_text_stacked(fb, 18, (EPD_HEIGHT - left_h) / 2, "LEFT", EDGE_SCALE, EPD_BLACK);
-    paint_text_stacked(fb, EPD_WIDTH - 18 - glyph_w, (EPD_HEIGHT - right_h) / 2, "RIGHT",
+    paint_text_stacked(fb, 14, (VIEW_H - left_h) / 2, "LEFT", EDGE_SCALE, EPD_BLACK);
+    paint_text_stacked(fb, VIEW_W - 14 - glyph_w, (VIEW_H - right_h) / 2, "RIGHT",
                        EDGE_SCALE, EPD_BLACK);
 }
 
 /*
- * Ticks just inside the frame, every 72 px across and 60 px down. Evenly spaced
- * and reaching both ends means the full 648x480 is being addressed with the
- * expected row stride.
+ * Ticks along the inside of the frame: TICKS_X of them spanning corner to
+ * corner across, TICKS_Y down. Spacing is divided out of the box rather than
+ * fixed, so the run always starts and ends hard against the frame whatever the
+ * box measures -- and unevenness, or a run that stops short, is the row-stride
+ * or resolution-register error it looks like.
  */
+#define TICKS_X 14
+#define TICKS_Y 11
+
+/* Position of tick i of n, spanning the frame's inner edges over `span` px. */
+static int tick_at(int i, int n, int span)
+{
+    return BORDER + i * (span - 2 * BORDER - 2) / (n - 1);
+}
+
 static void draw_edge_ticks(uint8_t *fb)
 {
-    for (int x = 0; x < EPD_WIDTH; x += 72) {
+    for (int i = 0; i < TICKS_X; i++) {
+        int x = tick_at(i, TICKS_X, VIEW_W);
         paint_fill_rect(fb, x, BORDER, 2, 8, EPD_BLACK);
-        paint_fill_rect(fb, x, EPD_HEIGHT - BORDER - 8, 2, 8, EPD_BLACK);
+        paint_fill_rect(fb, x, VIEW_H - BORDER - 8, 2, 8, EPD_BLACK);
     }
-    for (int y = 0; y < EPD_HEIGHT; y += 60) {
+    for (int i = 0; i < TICKS_Y; i++) {
+        int y = tick_at(i, TICKS_Y, VIEW_H);
         paint_fill_rect(fb, BORDER, y, 8, 2, EPD_BLACK);
-        paint_fill_rect(fb, EPD_WIDTH - BORDER - 8, y, 8, 2, EPD_BLACK);
+        paint_fill_rect(fb, VIEW_W - BORDER - 8, y, 8, 2, EPD_BLACK);
     }
 }
 
@@ -128,11 +155,11 @@ static void draw_swatches(uint8_t *fb)
     };
 
     const int count = sizeof(SWATCHES) / sizeof(SWATCHES[0]);
-    const int w = 120;
-    const int h = 96;
-    const int gap = 16;
-    const int y = 112;
-    const int x0 = (EPD_WIDTH - (count * w + (count - 1) * gap)) / 2;
+    const int w = 84;
+    const int h = 72;
+    const int gap = 12;
+    const int y = 108;
+    const int x0 = (VIEW_W - (count * w + (count - 1) * gap)) / 2;
 
     for (int i = 0; i < count; i++) {
         int x = x0 + i * (w + gap);
@@ -142,7 +169,7 @@ static void draw_swatches(uint8_t *fb)
         paint_rect(fb, x, y, w, h, 3, EPD_BLACK);
 
         paint_text_centered(fb, x + w / 2, y + h + 6, SWATCHES[i].name, NOTE_SCALE, EPD_BLACK);
-        paint_text_centered(fb, x + w / 2, y + h + 24, SWATCHES[i].code, NOTE_SCALE, EPD_BLACK);
+        paint_text_centered(fb, x + w / 2, y + h + 22, SWATCHES[i].code, NOTE_SCALE, EPD_BLACK);
     }
 }
 
@@ -152,51 +179,55 @@ static void draw_swatches(uint8_t *fb)
  */
 static void draw_up_arrow(uint8_t *fb)
 {
-    const int apex_y = 258;
-    const int tail_y = 386;
+    const int apex_y = 224;
+    const int tail_y = 324;
 
     /* Black underlay. */
     paint_fill_triangle(fb, CENTER_X, apex_y,
-                        CENTER_X - 48, apex_y + 64,
-                        CENTER_X + 48, apex_y + 64, EPD_BLACK);
-    paint_fill_rect(fb, CENTER_X - 19, apex_y + 64, 38, tail_y - (apex_y + 64), EPD_BLACK);
+                        CENTER_X - 44, apex_y + 56,
+                        CENTER_X + 44, apex_y + 56, EPD_BLACK);
+    paint_fill_rect(fb, CENTER_X - 17, apex_y + 56, 34, tail_y - (apex_y + 56), EPD_BLACK);
 
     /* Red arrow, inset far enough to leave the underlay showing as an outline. */
     paint_fill_triangle(fb, CENTER_X, apex_y + 8,
-                        CENTER_X - 40, apex_y + 60,
-                        CENTER_X + 40, apex_y + 60, EPD_RED);
-    paint_fill_rect(fb, CENTER_X - 15, apex_y + 60, 30, tail_y - 6 - (apex_y + 60), EPD_RED);
+                        CENTER_X - 36, apex_y + 52,
+                        CENTER_X + 36, apex_y + 52, EPD_RED);
+    paint_fill_rect(fb, CENTER_X - 13, apex_y + 52, 26, tail_y - 6 - (apex_y + 52), EPD_RED);
 }
 
-/* Captions flanking the arrow: panel identity on the left, what it means right. */
+/*
+ * Captions under the arrow rather than beside it: 468 px leaves no room for
+ * two text columns flanking the arrow at a legible size.
+ */
 static void draw_captions(uint8_t *fb)
 {
-    static const char *LEFT[] = {"5.83 IN (G)", "648 X 480", "4 COLOUR"};
-    static const char *RIGHT[] = {"ARROW POINTS", "TO THE TOP", "OF THE PANEL"};
+    paint_text_centered(fb, CENTER_X, 334, "ARROW POINTS", EDGE_SCALE, EPD_BLACK);
+    paint_text_centered(fb, CENTER_X, 358, "TO THE TOP", EDGE_SCALE, EPD_BLACK);
 
-    const int line_h = 30;
-    const int y0 = 280;
-
-    for (int i = 0; i < 3; i++) {
-        draw_text_right(fb, CENTER_X - 66, y0 + i * line_h, LEFT[i], BODY_SCALE, EPD_BLACK);
-        paint_text(fb, CENTER_X + 66, y0 + i * line_h, RIGHT[i], BODY_SCALE, EPD_BLACK);
-    }
+    /*
+     * Panel size, box size and where the box sits, so a glance says which
+     * geometry this drawing was built for.
+     */
+    paint_text_centered(fb, CENTER_X, 384, "648 X 480 PANEL - 478 X 460 AT (0,20)",
+                        NOTE_SCALE, EPD_BLACK);
 }
 
 void epd_pattern_draw(uint8_t *fb)
 {
+    /* Clears the dead margins too; everything after this clips to the box. */
     paint_clear(fb, EPD_WHITE);
-    paint_rect(fb, 0, 0, EPD_WIDTH, EPD_HEIGHT, BORDER, EPD_BLACK);
+    paint_rect(fb, 0, 0, VIEW_W, VIEW_H, BORDER, EPD_BLACK);
 
     draw_edge_ticks(fb);
     draw_corner_markers(fb);
     draw_edge_labels(fb);
+
+    paint_text_centered(fb, CENTER_X, 88, "RETRO CLOCK-RADIO 5.83 IN (G)", NOTE_SCALE,
+                        EPD_BLACK);
+
     draw_swatches(fb);
     draw_up_arrow(fb);
     draw_captions(fb);
-
-    paint_text_centered(fb, CENTER_X, 446, "RETRO CLOCK-RADIO DISPLAY TEST", NOTE_SCALE,
-                        EPD_BLACK);
 }
 
 esp_err_t epd_pattern_show(void)

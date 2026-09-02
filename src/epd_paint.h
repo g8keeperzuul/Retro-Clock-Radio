@@ -3,8 +3,13 @@
  *
  * A deliberately small stand-in for Waveshare's GUI_Paint: enough shapes and
  * text to compose a status screen, nothing that needs a file system or a font
- * pack. Coordinates are in panel pixels with (0,0) at the top-left as the panel
- * scans it. Everything clips silently against the panel bounds.
+ * pack.
+ *
+ * Coordinates are relative to the usable area, not the panel: (0,0) is its
+ * top-left corner, x runs to EPD_USABLE_WIDTH - 1 and y to
+ * EPD_USABLE_HEIGHT - 1. The offset into the frame buffer is applied here, and
+ * everything clips silently to the box, so nothing can stray into the dead
+ * margin along the top and right of the panel.
  */
 #pragma once
 
@@ -23,6 +28,7 @@ extern "C" {
 /* Advance between character origins, including the one-unit inter-glyph gap. */
 #define PAINT_CHAR_ADVANCE(scale) ((PAINT_FONT_W + 1) * (scale))
 
+/* Floods the entire buffer, dead margins included, so no stale ink is shipped. */
 void paint_clear(uint8_t *fb, epd_color_t color);
 void paint_pixel(uint8_t *fb, int x, int y, epd_color_t color);
 

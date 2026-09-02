@@ -117,13 +117,18 @@ void paint_clear(uint8_t *fb, epd_color_t color)
 
 void paint_pixel(uint8_t *fb, int x, int y, epd_color_t color)
 {
-    if (x < 0 || x >= EPD_WIDTH || y < 0 || y >= EPD_HEIGHT) {
+    /* Clipped to the usable box, not the panel: the rest is never visible. */
+    if (x < 0 || x >= EPD_USABLE_WIDTH || y < 0 || y >= EPD_USABLE_HEIGHT) {
         return;
     }
 
+    /* Only here do coordinates become panel pixels. */
+    const int px = x + EPD_USABLE_X;
+    const int py = y + EPD_USABLE_Y;
+
     /* Four pixels per byte, leftmost in the high bit pair. */
-    size_t addr = (size_t)y * EPD_ROW_BYTES + (size_t)x / 4;
-    int shift = 6 - (x % 4) * 2;
+    size_t addr = (size_t)py * EPD_ROW_BYTES + (size_t)px / 4;
+    int shift = 6 - (px % 4) * 2;
 
     fb[addr] = (uint8_t)((fb[addr] & ~(0x03 << shift)) | ((color & 0x03) << shift));
 }
