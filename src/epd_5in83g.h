@@ -88,6 +88,15 @@ esp_err_t epd_display(const uint8_t *fb);
  */
 esp_err_t epd_sleep(void);
 
+/*
+ * Called after every completed refresh, from the task that asked for it. Lets
+ * something else keep score -- the non-volatile refresh counter -- without the
+ * driver knowing anything about storage. Pass NULL to unhook. Set it before the
+ * first refresh or that one goes uncounted.
+ */
+typedef void (*epd_refresh_hook_t)(void);
+void epd_set_refresh_hook(epd_refresh_hook_t hook);
+
 /* Allocate a zeroed frame buffer, preferring PSRAM. NULL when out of memory. */
 uint8_t *epd_fb_alloc(void);
 void epd_fb_free(uint8_t *fb);

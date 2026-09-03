@@ -7,6 +7,10 @@
 | [5.83inch E-Paper Display](https://www.waveshare.com/5.83inch-e-paper-g.htm) | E-ink Display, 648 × 480, Red/Yellow/Black/White, SPI Interface |
 | [Rotary Encoder](https://www.adafruit.com/product/5880) | Adafruit I2C Stemma QT Rotary Encoder Breakout with Encoder - STEMMA QT / Qwiic |
 
+### KiCad
+
+[Espressif libraries for KiCad](https://github.com/espressif/kicad-libraries)
+
 ## Firmware Status
 Bootstraps the ESP32-S3 (NVS, TCP/IP stack, default event loop), paints a
 four-colour test pattern on the e-paper panel, joins a Wi-Fi network as a
@@ -21,6 +25,8 @@ driven yet.
 - [src/epd_pattern.c](src/epd_pattern.c) — the bring-up test pattern
 - [src/epd_clockface.c](src/epd_clockface.c) — the analog clock face
 - [src/epd_deco_font.c](src/epd_deco_font.c) — Art Deco numerals (generated)
+- [src/clock_display.c](src/clock_display.c) — five-minute update task
+- [src/refresh_count.c](src/refresh_count.c) — lifetime refresh counter in NVS
 
 ## Display
 The panel is a Waveshare 5.83" e-Paper (G): 648 x 480, four inks
@@ -73,8 +79,9 @@ and readable at a glance:
 outside a two-line chapter ring, an inner minute track with wedges on the fives,
 cross lines running out to the edges.
 
-The dial only — no hour, minute or second hands. Those belong to whatever draws
-the current time over the top.
+The hands follow the pair in the photograph: solid black tapered wedges, broad
+at the boss and narrowing to a blunt tip, with the boss drawn over both. No
+second hand — see the cadence below for why there could not be one.
 
 #### Numerals
 The dial does not use the built-in 5x7 font — that font is blocky by design, and
@@ -100,6 +107,44 @@ contrast, scaling the bitmap would destroy the thing that makes it Deco. Labels
 elsewhere still use the 5x7 font. Numerals are drawn yellow with a one-pixel
 black outline, eight offset copies of the glyph — enough to hold an edge on
 white without swallowing the hairlines.
+
+### Update cadence
+[src/clock_display.c](src/clock_display.c) redraws the hands every **five
+minutes**, and that number is set by the panel, not by taste. A full refresh
+takes ~25 s, the panel cannot do partial updates at all, and Waveshare's
+datasheet asks for **at least 180 s between updates** — so a moving minute hand
+is not on offer. Five minutes clears the floor and lands the minute hand on the
+dial's own five-minute wedges, which makes the step look deliberate.
+
+The hands show the **nearest** five-minute mark rather than the one just gone,
+so the time displayed is never more than **±2 min 30 s** from the truth. That is
+why the task wakes at 02:30, 07:30, 12:30 and so on rather than on the fives:
+those are the instants the nearest mark changes. The hour hand carries between
+the numerals in proportion to the minutes, as a real movement does.
+
+The task also enforces the 180 s floor itself, which matters just after boot
+where the first refresh and the first step change can otherwise fall seconds
+apart. With the clock unset it puts up the bare dial and waits, adding the hands
+once NTP lands.
+
+### Refresh counter
+The panel is rated for **1,000,000 updates or 5 years**, so
+[src/refresh_count.c](src/refresh_count.c) keeps a lifetime count of them in
+NVS. At 288 refreshes a day the five-year clause is what binds first; at one a
+minute it would have been the million, in under two years.
+
+The count is kept in the `nvs` partition at 0x9000, which a normal
+`pio run -t upload` does not touch — new firmware inherits the running total.
+Two things do lose it: an explicit full erase (`pio run -t erase`, or esptool's
+`erase_flash`), and the `nvs_flash_erase()` recovery path in
+[src/wifi_sta.c](src/wifi_sta.c), which fires only if NVS turns up corrupt or
+version-incompatible. `refresh_count_init()` deliberately does *not* erase to
+recover, since that would discard the very thing it is counting.
+
+Counting hangs off a hook in the panel driver
+(`epd_set_refresh_hook()`), fired once per refresh the panel actually performed.
+That way every path that refreshes is counted — the clock face, the test
+pattern, `epd_clear()` — without the driver knowing anything about storage.
 
 ### Wiring
 Defaults follow Waveshare's own ESP32-S3 reference wiring. All six are

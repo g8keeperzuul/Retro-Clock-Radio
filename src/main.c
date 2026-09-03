@@ -6,9 +6,9 @@
  *   - Waveshare 5.83" e-paper (G) display, 648x480, four colour, SPI
  *   - Adafruit I2C STEMMA QT rotary encoder breakout  (not driven yet)
  *
- * This stage bootstraps the microcontroller, puts the clock face on the e-paper
- * panel, joins the Wi-Fi network configured in platformio.ini, and sets the
- * real-time clock from NTP.
+ * This stage bootstraps the microcontroller, joins the Wi-Fi network configured
+ * in platformio.ini, sets the real-time clock from NTP, and puts the clock face
+ * on the e-paper panel with its hands stepping every five minutes.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -25,9 +25,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "clock_display.h"
 #include "epd_5in83g.h"
 #include "epd_clockface.h"
 #include "epd_pattern.h"
+#include "refresh_count.h"
 #include "time_sync.h"
 #include "wifi_sta.h"
 
@@ -97,15 +99,22 @@ void app_main(void)
     log_boot_banner();
 
     /*
-     * Panel bring-up first: it does not need the network, and a wrong pin map
-     * or a loose ribbon shows up here rather than behind a Wi-Fi timeout.
-     * Neither failure is fatal -- the clock still keeps time without a screen.
+     * The refresh counter goes first, so it can hook the panel driver before
+     * anything has a chance to refresh. Losing it is not fatal; it says so.
+     */
+    refresh_count_init();
+
+    /*
+     * Panel bring-up next: it does not need the network, and a wrong pin map or
+     * a loose ribbon shows up here rather than behind a Wi-Fi timeout. Not
+     * fatal either -- the clock still keeps time without a screen.
+     *
+     * Nothing is drawn yet. The display task owns the glass from here, and
+     * putting a handless dial up now would only burn a refresh that the first
+     * scheduled one repeats half a minute later. For the bring-up test pattern
+     * instead, call epd_pattern_show() here and skip clock_display_start().
      */
     esp_err_t epd_err = epd_init();
-    if (epd_err == ESP_OK) {
-        /* Swap in epd_pattern_show() to put the bring-up test pattern up instead. */
-        epd_err = epd_clockface_show();
-    }
     if (epd_err != ESP_OK) {
         ESP_LOGE(TAG, "e-paper display unavailable: %s", esp_err_to_name(epd_err));
     }
@@ -135,6 +144,14 @@ void app_main(void)
             esp_restart();
         }
         /* else treat lack of wifi connection as non-fatal */
+    }
+
+    /*
+     * Started whether or not the network came up: with the clock unset the task
+     * shows the bare dial and waits, then puts the hands on once NTP lands.
+     */
+    if (epd_err == ESP_OK) {
+        ESP_ERROR_CHECK(clock_display_start());
     }
 
     while (true) {

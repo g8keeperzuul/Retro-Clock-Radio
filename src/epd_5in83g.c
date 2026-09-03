@@ -185,6 +185,13 @@ static void epd_reset(void)
  */
 #define EPD_REFRESH_MIN_PLAUSIBLE_MS 2000
 
+static epd_refresh_hook_t s_refresh_hook;
+
+void epd_set_refresh_hook(epd_refresh_hook_t hook)
+{
+    s_refresh_hook = hook;
+}
+
 static esp_err_t epd_refresh(void)
 {
     int elapsed_ms = 0;
@@ -206,6 +213,11 @@ static esp_err_t epd_refresh(void)
     }
 
     ESP_LOGD(TAG, "refresh took %d ms", elapsed_ms);
+
+    /* Only a refresh the panel actually performed counts against its life. */
+    if (s_refresh_hook != NULL) {
+        s_refresh_hook();
+    }
     return ESP_OK;
 }
 

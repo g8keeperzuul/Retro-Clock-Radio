@@ -48,6 +48,20 @@ static const char *TAG = "epd-clock";
 #define RING_LINE  2     /* thickness of each chapter-ring circle */
 #define HUB_R      5
 
+/*
+ * The hands, shaped like the pair in the photograph: a broad flat base at the
+ * boss tapering to a narrow flat tip, no point and no tail. Half-widths, so
+ * HOUR_W0 of 6.5 is a 13 px base. The minute hand reaches into the minute
+ * track; the hour hand stops around two thirds of the way out.
+ */
+#define HAND_BASE_R  8     /* both hands start clear of the boss */
+#define HOUR_R      72
+#define HOUR_W0      6.5f
+#define HOUR_W1      2.5f
+#define MINUTE_R   106
+#define MINUTE_W0    6.0f
+#define MINUTE_W1    2.0f
+
 #define NUM_OUTLINE 1    /* how far the black outline stands off the fill */
 #define NUM_GAP     5    /* between the figures of a two-figure numeral */
 #define SLEEP_SCALE 2    /* SLEEP keeps the plain built-in font */
@@ -212,6 +226,22 @@ static void draw_numerals(uint8_t *fb)
     }
 }
 
+void epd_clockface_draw_hands(uint8_t *fb, int hour, int minute)
+{
+    /*
+     * The hour hand sits between numerals in proportion to the minutes: at
+     * half past, it is halfway to the next hour. Twelve hours is sixty minute
+     * marks, so an hour is five of them and a minute is a twelfth of one.
+     */
+    const float hour_pos = (float)(hour % 12) * 5.0f + (float)minute / 12.0f;
+
+    draw_spoke(fb, hour_pos, HAND_BASE_R, HOUR_R, HOUR_W0, HOUR_W1, EPD_BLACK);
+    draw_spoke(fb, (float)minute, HAND_BASE_R, MINUTE_R, MINUTE_W0, MINUTE_W1, EPD_BLACK);
+
+    /* The boss goes on last, covering both bases as it does on the original. */
+    paint_fill_circle(fb, CX, CY, HUB_R, EPD_BLACK);
+}
+
 void epd_clockface_draw(uint8_t *fb)
 {
     /* Clears the dead margins too; everything after this clips to the box. */
@@ -228,13 +258,17 @@ void epd_clockface_draw(uint8_t *fb)
     paint_fill_circle(fb, CX, CY, HUB_R, EPD_BLACK);
 }
 
-esp_err_t epd_clockface_show(void)
+/* Shared by both entry points; `hour` below zero means draw the bare dial. */
+static esp_err_t clockface_show(int hour, int minute)
 {
     uint8_t *fb = epd_fb_alloc();
     ESP_RETURN_ON_FALSE(fb != NULL, ESP_ERR_NO_MEM, TAG, "no room for a %u byte frame",
                         (unsigned)EPD_FB_SIZE);
 
     epd_clockface_draw(fb);
+    if (hour >= 0) {
+        epd_clockface_draw_hands(fb, hour, minute);
+    }
 
     esp_err_t err = epd_wake();
     if (err == ESP_OK) {
@@ -252,4 +286,15 @@ esp_err_t epd_clockface_show(void)
 
     ESP_LOGI(TAG, "clock face displayed, panel asleep");
     return ESP_OK;
+}
+
+esp_err_t epd_clockface_show(void)
+{
+    return clockface_show(-1, 0);
+}
+
+esp_err_t epd_clockface_show_time(int hour, int minute)
+{
+    ESP_LOGI(TAG, "showing %02d:%02d", hour, minute);
+    return clockface_show(hour, minute);
 }
