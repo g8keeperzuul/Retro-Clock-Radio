@@ -40,6 +40,14 @@ void paint_fill_circle(uint8_t *fb, int cx, int cy, int r, epd_color_t color);
 void paint_fill_triangle(uint8_t *fb, int x0, int y0, int x1, int y1, int x2, int y2,
                          epd_color_t color);
 
+/*
+ * Draw a 1-bit bitmap: one word per row, leftmost pixel in bit 0, up to 32 px
+ * wide. Clear bits are left alone, so a glyph can be laid over what is already
+ * there -- which is how the numerals get their outline.
+ */
+void paint_bitmap(uint8_t *fb, int x, int y, const uint32_t *rows, int w, int h,
+                  epd_color_t color);
+
 /* Width in pixels the given string occupies, excluding the trailing gap. */
 int paint_text_width(const char *text, int scale);
 

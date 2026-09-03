@@ -194,6 +194,20 @@ void paint_fill_triangle(uint8_t *fb, int x0, int y0, int x1, int y1, int x2, in
     }
 }
 
+void paint_bitmap(uint8_t *fb, int x, int y, const uint32_t *rows, int w, int h,
+                  epd_color_t color)
+{
+    for (int row = 0; row < h; row++) {
+        const uint32_t bits = rows[row];
+
+        for (int col = 0; col < w; col++) {
+            if ((bits >> col) & 1u) {
+                paint_pixel(fb, x + col, y + row, color);
+            }
+        }
+    }
+}
+
 static void paint_char(uint8_t *fb, int x, int y, char c, int scale, epd_color_t color)
 {
     if ((unsigned char)c < FONT_FIRST || (unsigned char)c > FONT_LAST) {

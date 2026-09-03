@@ -1,8 +1,8 @@
 /*
  * epd_clockface.c - Analog clock face for the e-paper panel. See the header.
  *
- * Modelled on the dial in docs/pictures/clock-face.png: outlined numerals
- * standing outside a two-line chapter ring, an inner minute track with wedges
+ * Modelled on the dial in docs/pictures/clock-face.png: outlined Art Deco
+ * numerals (epd_deco_font.h) standing outside a two-line chapter ring, an inner minute track with wedges
  * on the fives, cross lines running out to the edges of the plate, and SLEEP
  * marked under the ring.
  *
@@ -15,9 +15,9 @@
 
 #include <math.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "epd_5in83g.h"
+#include "epd_deco_font.h"
 #include "epd_paint.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -48,19 +48,14 @@ static const char *TAG = "epd-clock";
 #define RING_LINE  2     /* thickness of each chapter-ring circle */
 #define HUB_R      5
 
-#define NUM_SCALE  5     /* hour numerals */
-#define NUM_OUTLINE 2    /* how far the black outline stands off the fill */
-
-/*
- * Digits are set one at a time on this advance rather than handed to
- * paint_text() as a word: the font's own spacing is narrower than the outline
- * is wide, so 10, 11 and 12 would run together.
- */
-#define NUM_ADVANCE (PAINT_CHAR_ADVANCE(NUM_SCALE) + 2 * NUM_OUTLINE)
-#define SLEEP_SCALE 2
+#define NUM_OUTLINE 1    /* how far the black outline stands off the fill */
+#define NUM_GAP     5    /* between the figures of a two-figure numeral */
+#define SLEEP_SCALE 2    /* SLEEP keeps the plain built-in font */
 
 /* Where SLEEP sits below the ring, and where the 12 o'clock line stops short. */
 #define SLEEP_Y (CY + 146)
+
+#define NUM_HALF_H (DECO_GLYPH_H / 2)
 
 /* Radians per minute mark, spelled out rather than leaning on M_PI. */
 #define RAD_PER_MINUTE (2.0f * 3.14159265f / 60.0f)
@@ -153,40 +148,48 @@ static void draw_cross_lines(uint8_t *fb)
     paint_fill_rect(fb, edge, CY - t / 2, CX - R_QUARTER - edge, t, EPD_BLACK);
     paint_fill_rect(fb, CX + R_QUARTER, CY - t / 2, VIEW_W - edge - (CX + R_QUARTER), t, EPD_BLACK);
 
-    const int top_from = CY - R_NUMERAL + PAINT_FONT_H * NUM_SCALE / 2 + 8;
+    const int top_from = CY - R_NUMERAL + NUM_HALF_H + 8;
     paint_fill_rect(fb, CX - t / 2, top_from, t, (CY - R_QUARTER) - top_from, EPD_BLACK);
     //paint_fill_rect(fb, CX - t / 2, CY + R_QUARTER, t, (SLEEP_Y - 6) - (CY + R_QUARTER), EPD_BLACK);
     paint_fill_rect(fb, CX - t / 2, CY + R_QUARTER, t, SLEEP_Y - (CY + R_QUARTER), EPD_BLACK);
 }
 
+/* Set width of a numeral, figures proportionally spaced. */
+static int numeral_width(const char *text)
+{
+    int width = -NUM_GAP;
+
+    for (const char *p = text; *p != '\0'; p++) {
+        width += DECO_DIGITS[*p - '0'].w + NUM_GAP;
+    }
+    return width;
+}
+
 /*
- * Hour numerals, yellow with a black outline -- the nearest the four inks come
- * to the original's dark-edged tan. The outline is eight offset copies of the
- * glyph rather than a real stroke: same look, and it costs nothing but time.
+ * Hour numerals in the Deco set, yellow with a black outline -- the nearest the
+ * four inks come to the original's dark-edged tan. The outline is eight offset
+ * copies of the glyph rather than a real stroke: same look at one pixel, and it
+ * costs nothing but time.
  */
 static void draw_numeral(uint8_t *fb, int cx, int cy, const char *text)
 {
-    const int digits = (int)strlen(text);
-    const int width = digits * NUM_ADVANCE - (NUM_ADVANCE - PAINT_FONT_W * NUM_SCALE);
-    const int y = cy - PAINT_FONT_H * NUM_SCALE / 2;
-    int x = cx - width / 2;
+    const int y = cy - NUM_HALF_H;
+    int x = cx - numeral_width(text) / 2;
 
-    for (int i = 0; i < digits; i++, x += NUM_ADVANCE) {
-        /*
-         * The built-in zero is slashed, which is the right call for a test
-         * pattern and mud at this size. The font's O is the same ring without
-         * the bar through it, so 10 and 12 borrow it.
-         */
-        const char digit[2] = {text[i] == '0' ? 'O' : text[i], '\0'};
+    for (const char *p = text; *p != '\0'; p++) {
+        const deco_glyph_t *glyph = &DECO_DIGITS[*p - '0'];
 
         for (int dy = -NUM_OUTLINE; dy <= NUM_OUTLINE; dy++) {
             for (int dx = -NUM_OUTLINE; dx <= NUM_OUTLINE; dx++) {
                 if (dx != 0 || dy != 0) {
-                    paint_text(fb, x + dx, y + dy, digit, NUM_SCALE, EPD_BLACK);
+                    paint_bitmap(fb, x + dx, y + dy, glyph->rows, glyph->w, DECO_GLYPH_H,
+                                 EPD_BLACK);
                 }
             }
         }
-        paint_text(fb, x, y, digit, NUM_SCALE, EPD_YELLOW);
+        paint_bitmap(fb, x, y, glyph->rows, glyph->w, DECO_GLYPH_H, EPD_YELLOW);
+
+        x += glyph->w + NUM_GAP;
     }
 }
 
