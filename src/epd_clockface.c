@@ -1,8 +1,8 @@
 /*
  * epd_clockface.c - Analog clock face for the e-paper panel. See the header.
  *
- * Modelled on the dial in docs/pictures/clock-face.png: outlined Art Deco
- * numerals (epd_deco_font.h) standing outside a two-line chapter ring, an inner minute track with wedges
+ * Modelled on the dial in docs/pictures/clock-face.png: Art Deco numerals
+ * (epd_font.h) standing outside a two-line chapter ring, an inner minute track with wedges
  * on the fives, cross lines running out to the edges of the plate, and SLEEP
  * marked under the ring.
  *
@@ -17,7 +17,7 @@
 #include <stdio.h>
 
 #include "epd_5in83g.h"
-#include "epd_deco_font.h"
+#include "epd_font.h"
 #include "epd_paint.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -62,14 +62,12 @@ static const char *TAG = "epd-clock";
 #define MINUTE_W0    6.0f
 #define MINUTE_W1    2.0f
 
-#define NUM_OUTLINE 1    /* how far the black outline stands off the fill */
-#define NUM_GAP     5    /* between the figures of a two-figure numeral */
 #define SLEEP_SCALE 2    /* SLEEP keeps the plain built-in font */
 
 /* Where SLEEP sits below the ring, and where the 12 o'clock line stops short. */
 #define SLEEP_Y (CY + 146)
 
-#define NUM_HALF_H (DECO_GLYPH_H / 2)
+#define NUM_HALF_H (FONT_DIAL.line_height / 2)
 
 /* Radians per minute mark, spelled out rather than leaning on M_PI. */
 #define RAD_PER_MINUTE (2.0f * 3.14159265f / 60.0f)
@@ -168,43 +166,14 @@ static void draw_cross_lines(uint8_t *fb)
     paint_fill_rect(fb, CX - t / 2, CY + R_QUARTER, t, SLEEP_Y - (CY + R_QUARTER), EPD_BLACK);
 }
 
-/* Set width of a numeral, figures proportionally spaced. */
-static int numeral_width(const char *text)
-{
-    int width = -NUM_GAP;
-
-    for (const char *p = text; *p != '\0'; p++) {
-        width += DECO_DIGITS[*p - '0'].w + NUM_GAP;
-    }
-    return width;
-}
-
 /*
- * Hour numerals in the Deco set, yellow with a black outline -- the nearest the
- * four inks come to the original's dark-edged tan. The outline is eight offset
- * copies of the glyph rather than a real stroke: same look at one pixel, and it
- * costs nothing but time.
+ * Hour numerals, solid black. The dial used to set them in yellow behind a
+ * black outline, which suited the blocky face it had then; Rigelsia's stems are
+ * three pixels wide and an outline would leave nothing of them.
  */
 static void draw_numeral(uint8_t *fb, int cx, int cy, const char *text)
 {
-    const int y = cy - NUM_HALF_H;
-    int x = cx - numeral_width(text) / 2;
-
-    for (const char *p = text; *p != '\0'; p++) {
-        const deco_glyph_t *glyph = &DECO_DIGITS[*p - '0'];
-
-        for (int dy = -NUM_OUTLINE; dy <= NUM_OUTLINE; dy++) {
-            for (int dx = -NUM_OUTLINE; dx <= NUM_OUTLINE; dx++) {
-                if (dx != 0 || dy != 0) {
-                    paint_bitmap(fb, x + dx, y + dy, glyph->rows, glyph->w, DECO_GLYPH_H,
-                                 EPD_BLACK);
-                }
-            }
-        }
-        paint_bitmap(fb, x, y, glyph->rows, glyph->w, DECO_GLYPH_H, EPD_YELLOW);
-
-        x += glyph->w + NUM_GAP;
-    }
+    font_draw_text_centered(fb, cx, cy - NUM_HALF_H, &FONT_DIAL, text, EPD_BLACK);
 }
 
 static void draw_numerals(uint8_t *fb)

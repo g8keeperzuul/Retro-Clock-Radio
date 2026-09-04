@@ -96,6 +96,46 @@ build_flags =
     ; Interval between background re-syncs.
     -D NTP_SYNC_INTERVAL_MS=3600000
 
+    ; --- Weather -----------------------------------------------------------
+    ; OpenWeather One Call 3.0. That API needs its own "One Call by Call"
+    ; subscription, which is free for the first 1000 calls a day; the polling
+    ; interval and the cap below keep the firmware well inside that.
+    ;
+    ; The key is a secret, so it lives here rather than in the sources, and
+    ; platformio.ini is not tracked by git. Omitting it fails the build.
+    -D OWM_API_KEY=\"openweather api key\"
+
+    ; Which forecast endpoint to call. data/2.5/forecast is reachable with an
+    ; ordinary key: three-hourly, five days. data/3.0/onecall is hourly and
+    ; richer but needs a separate "One Call by Call" subscription and returns
+    ; 401 without one -- switching the path alone will not help.
+    -D OWM_FORECAST_PATH=\"/data/2.5/forecast\"
+
+    ; Where to forecast for, in decimal degrees. Strings rather than numbers:
+    ; they are only ever pasted into a URL, and this sidesteps any argument
+    ; about how a float is formatted.
+    -D OWM_LATITUDE=\"xx.x\"
+    -D OWM_LONGITUDE=\"yy.y\"
+
+    ; standard (Kelvin), metric (Celsius) or imperial (Fahrenheit). The second
+    ; macro is the same choice for the code, which cannot compare strings.
+    -D OWM_UNITS=\"metric\"
+    -D OWM_UNITS_ENUM=WX_UNITS_METRIC
+
+    ; How often to fetch. Half-hourly is 48 calls a day; the forecast does not
+    ; move faster than that, and an unchanged one costs no panel refresh.
+    -D OWM_POLL_INTERVAL_S=1800
+
+    ; The two brakes on the call budget. The daily cap is the obvious one; the
+    ; minimum interval is the one that matters, because it is what stops a
+    ; reboot loop making one call per boot.
+    -D OWM_MAX_CALLS_PER_DAY=200
+    -D OWM_MIN_CALL_INTERVAL_S=600
+
+    ; Set to 1 to render from a canned response and make no network call at
+    ; all. Costs 20 KB of flash for the payload, so leave it off in a real build.
+    -D WEATHER_MOCK=0
+
     ; --- e-Paper display ---------------------------------------------------
     ; Waveshare 5.83" e-Paper (G), 648x480, black/white/yellow/red, 4-wire SPI.
     ; Defaults match Waveshare's own ESP32-S3 reference wiring; change them to

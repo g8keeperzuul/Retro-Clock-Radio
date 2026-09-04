@@ -7,8 +7,8 @@
  *   - Adafruit I2C STEMMA QT rotary encoder breakout  (not driven yet)
  *
  * This stage bootstraps the microcontroller, joins the Wi-Fi network configured
- * in platformio.ini, sets the real-time clock from NTP, and puts the clock face
- * on the e-paper panel with its hands stepping every five minutes.
+ * in platformio.ini, sets the real-time clock from NTP, and puts the daily
+ * weather on the e-paper panel.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -31,6 +31,7 @@
 #include "epd_pattern.h"
 #include "refresh_count.h"
 #include "time_sync.h"
+#include "weather_display.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "main";
@@ -147,11 +148,15 @@ void app_main(void)
     }
 
     /*
-     * Started whether or not the network came up: with the clock unset the task
-     * shows the bare dial and waits, then puts the hands on once NTP lands.
+     * The weather screen owns the panel for now. The clock face is still built
+     * and still works -- clock_display_start() brings it up -- and the two will
+     * be switchable once the rotary encoder is driven.
+     *
+     * Started whether or not the network came up: with no forecast yet the task
+     * puts up an empty dial and keeps trying.
      */
     if (epd_err == ESP_OK) {
-        ESP_ERROR_CHECK(clock_display_start());
+        ESP_ERROR_CHECK(weather_display_start());
     }
 
     while (true) {
