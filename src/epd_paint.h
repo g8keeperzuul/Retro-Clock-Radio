@@ -37,6 +37,14 @@ void paint_fill_rect(uint8_t *fb, int x, int y, int w, int h, epd_color_t color)
 void paint_rect(uint8_t *fb, int x, int y, int w, int h, int thickness, epd_color_t color);
 
 void paint_fill_circle(uint8_t *fb, int cx, int cy, int r, epd_color_t color);
+
+/*
+ * A straight line of the given thickness, at any angle. Built from two
+ * triangles, that being the widest thing this layer can fill; the ends are
+ * square, so a radial line meets a circle cleanly.
+ */
+void paint_line(uint8_t *fb, int x0, int y0, int x1, int y1, int thickness,
+                epd_color_t color);
 void paint_fill_triangle(uint8_t *fb, int x0, int y0, int x1, int y1, int x2, int y2,
                          epd_color_t color);
 

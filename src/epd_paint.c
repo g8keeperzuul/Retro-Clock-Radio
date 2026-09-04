@@ -3,6 +3,7 @@
  */
 #include "epd_paint.h"
 
+#include <math.h>
 #include <string.h>
 
 /*
@@ -164,6 +165,25 @@ void paint_fill_circle(uint8_t *fb, int cx, int cy, int r, epd_color_t color)
             }
         }
     }
+}
+
+void paint_line(uint8_t *fb, int x0, int y0, int x1, int y1, int thickness,
+                epd_color_t color)
+{
+    const float dx = (float)(x1 - x0), dy = (float)(y1 - y0);
+    const float length = sqrtf(dx * dx + dy * dy);
+
+    if (length < 1.0f) {
+        return;
+    }
+
+    /* Half a thickness, perpendicular to the run. */
+    const float half = (float)thickness / 2.0f;
+    const int px = (int)lroundf(-dy / length * half);
+    const int py = (int)lroundf(dx / length * half);
+
+    paint_fill_triangle(fb, x0 + px, y0 + py, x1 + px, y1 + py, x1 - px, y1 - py, color);
+    paint_fill_triangle(fb, x0 + px, y0 + py, x1 - px, y1 - py, x0 - px, y0 - py, color);
 }
 
 /* Signed area of the triangle (a,b,c), doubled -- the usual half-plane test. */

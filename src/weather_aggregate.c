@@ -182,7 +182,7 @@ static wx_cond_t worst_in_day(const bucket_t *bucket)
     wx_cond_t worst = WX_UNKNOWN;
 
     for (int w = 0; w < WX_PART_COUNT; w++) {
-        for (int c = WX_COND_COUNT - 1; c > worst; c--) {
+        for (int c = WX_COND_COUNT - 1; c > (int)worst; c--) {
             if (bucket[w].hours[c] > 0) {
                 worst = (wx_cond_t)c;
                 break;

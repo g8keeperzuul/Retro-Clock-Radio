@@ -7,11 +7,106 @@
 | [5.83inch E-Paper Display](https://www.waveshare.com/5.83inch-e-paper-g.htm) | E-ink Display, 648 × 480, Red/Yellow/Black/White, SPI Interface |
 | [Rotary Encoder](https://www.adafruit.com/product/5880) | Adafruit I2C Stemma QT Rotary Encoder Breakout with Encoder - STEMMA QT / Qwiic |
 
+## Wiring
+Defaults follow Waveshare's own ESP32-S3 reference wiring. All six are
+`build_flags` in [platformio.ini](platformio.ini) — rewire freely and update
+them to match.
+
+This panel's interface is **nine** wires, not the usual eight — `PWR` is a
+power-control input, and with it floating the panel never powers up.
+
+| Panel | ESP32-S3 GPIO | Macro |
+|---|---|---|
+| VCC / GND | 3V3 / GND | — |
+| DIN | 11 | `EPD_PIN_MOSI` |
+| SCLK | 12 | `EPD_PIN_SCLK` |
+| CS | 10 | `EPD_PIN_CS` |
+| DC | 13 | `EPD_PIN_DC` |
+| RST | 14 | `EPD_PIN_RST` |
+| BUSY | 4 | `EPD_PIN_BUSY` |
+| PWR | 5 | `EPD_PIN_PWR` |
+
+Set `EPD_PIN_PWR` to `-1` only for an older 8-pin panel with no PWR pin.
+
+The panel's mode switch must be in the **4-line SPI** position; the driver does
+not implement 3-line mode.
+
+### Troubleshooting
+BUSY on this panel reads **low while busy** and high when idle — the opposite
+sense of Waveshare's monochrome panels. That makes an unpowered or disconnected
+panel look identical to an idle one, so the driver cross-checks the timing:
+
+- `BUSY stuck low` — the pin is held low past `EPD_BUSY_TIMEOUT_MS`. Usually
+  miswired, or shorted.
+- `refresh finished in N ms` — the refresh "succeeded" far too quickly, so BUSY
+  was never asserted and the panel is not responding at all. Check PWR first,
+  then the mode switch, then DIN/SCLK/CS/DC.
+
+A silent success with a blank panel should not be possible; if you see one,
+that check is what failed.
+
 ### KiCad
 
 [Espressif libraries for KiCad](https://github.com/espressif/kicad-libraries)
 
-## Firmware Status
+
+## Configuration
+Wi-Fi credentials and connection tuning are compile-time parameters, defined as
+`build_flags` in [platformio.ini](platformio.ini) — nothing is hard-coded in the
+sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
+
+| Macro | Default | Purpose |
+|---|---|---|
+| `WIFI_SSID` | *(required)* | Network to join |
+| `WIFI_PASSWORD` | *(required)* | Pre-shared key |
+| `WIFI_HOSTNAME` | `retro-clock-radio` | Name requested from DHCP |
+| `WIFI_AUTH_THRESHOLD` | `WIFI_AUTH_WPA2_PSK` | Weakest acceptable AP security |
+| `WIFI_CONNECT_MAX_RETRY` | `0` | Attempts before reboot; 0 = retry forever |
+| `WIFI_CONNECT_TIMEOUT_MS` | `15000` | Per-attempt deadline for assoc + DHCP |
+| `WIFI_CONNECT_BACKOFF_MIN_MS` | `1000` | Initial delay between attempts |
+| `WIFI_CONNECT_BACKOFF_MAX_MS` | `30000` | Backoff ceiling |
+| `BOOT_LOG_DELAY_MS` | `5000` | Silent pause before the first log line |
+| `NTP_SERVER` | `pool.ntp.org` | NTP server used to set the clock |
+| `TIME_ZONE` | `EST5EDT,M3.2.0,M11.1.0` | Local timezone as a POSIX TZ string |
+| `NTP_SYNC_TIMEOUT_MS` | `30000` | Wait for the first NTP response before continuing |
+| `NTP_SYNC_INTERVAL_MS` | `3600000` | Interval between background re-syncs |
+| `EPD_PIN_SCLK` | `12` | Panel CLK |
+| `EPD_PIN_MOSI` | `11` | Panel DIN |
+| `EPD_PIN_CS` | `10` | Panel CS |
+| `EPD_PIN_DC` | `13` | Panel DC (command/data select) |
+| `EPD_PIN_RST` | `14` | Panel RST |
+| `EPD_PIN_BUSY` | `4` | Panel BUSY (low = busy) |
+| `EPD_PIN_PWR` | `5` | Panel PWR (power control); -1 only on 8-pin panels |
+| `EPD_SPI_HOST` | `SPI2_HOST` | SPI peripheral driving the panel |
+| `EPD_SPI_SPEED_HZ` | `10000000` | SPI clock; the panel is rated to 20 MHz |
+| `EPD_BUSY_TIMEOUT_MS` | `60000` | Ceiling on one BUSY wait (a refresh takes ~25 s) |
+| `OWM_API_KEY` | *(required)* | OpenWeather API key |
+| `OWM_FORECAST_PATH` | `/data/2.5/forecast` | Endpoint; `/data/4.0/onecall` requires a credit card on file |
+| `OWM_LATITUDE` | *(required)* | Latitude to forecast for, decimal degrees, quoted |
+| `OWM_LONGITUDE` | *(required)* | Longitude, decimal degrees, quoted |
+| `OWM_UNITS` | `metric` | `standard`, `metric` or `imperial` |
+| `OWM_UNITS_ENUM` | `WX_UNITS_METRIC` | The same choice for the code, which cannot compare strings |
+| `OWM_POLL_INTERVAL_S` | `1800` | Seconds between fetches; 1800 is 48 calls a day |
+| `OWM_MAX_CALLS_PER_DAY` | `200` | Daily cap, well under the 1000/day free tier |
+| `OWM_MIN_CALL_INTERVAL_S` | `600` | Floor between attempts; what stops a reboot loop |
+| `WEATHER_MOCK` | `0` | 1 = render a canned response and make no network call |
+
+Omitting `WIFI_SSID`, `WIFI_PASSWORD`, `OWM_API_KEY`, `OWM_LATITUDE` or
+`OWM_LONGITUDE` fails the build with an `#error` rather than silently producing
+firmware that cannot connect or cannot forecast. Latitude and longitude are
+quoted strings, not numbers: they are only ever pasted into a URL, and that
+sidesteps any argument about how a float is formatted.
+
+To keep credentials out of version control, comment those two flags out and
+export them at build time instead:
+
+```sh
+export PLATFORMIO_BUILD_FLAGS='-D WIFI_SSID=\"my-ssid\" -D WIFI_PASSWORD=\"my-pass\"'
+pio run -t upload -t monitor
+```
+
+
+## Firmware Organization
 Bootstraps the ESP32-S3 (NVS, TCP/IP stack, default event loop), paints a
 four-colour test pattern on the e-paper panel, joins a Wi-Fi network as a
 station, then sets the real-time clock from NTP. The rotary encoder is not
@@ -80,6 +175,11 @@ and readable at a glance:
   hard against the visible edges, or a strip of white above the top one, means
   the crop is wrong.
 
+_The full panel size is not used!_
+This project needed a smaller panel size that could not be found, so a larger one was used instead. 
+
+![test pattern](./docs/pictures/pattern460.png)
+
 ### Clock face
 [src/epd_clockface.c](src/epd_clockface.c) draws the dial inspired by
 [docs/pictures/clock-face.png](docs/pictures/clock-face.png): outlined numerals
@@ -89,6 +189,9 @@ cross lines running out to the edges.
 The hands follow the pair in the photograph: solid black tapered wedges, broad
 at the boss and narrowing to a blunt tip, with the boss drawn over both. No
 second hand — see the cadence below for why there could not be one.
+
+![real clock](./docs/pictures/clock-face.png)
+![clock](./docs/pictures/hclock.png)
 
 #### Type
 Both screens set type from `fonts/Aesthetic Rigelsia Free.ttf`, rasterised to
@@ -125,15 +228,49 @@ This uses the version [2.5 of the API](https://openweathermap.org/api/current?co
 The latest [version 4.0 of the One Call API](https://openweathermap.org/api/one-call-4?collection=one_call_api) has more features and it is also free up to a sufficient number of daily requests, but requires a credit card on file (even if the free usage is not exceeded).
 
 ---
-[src/epd_weather.c](src/epd_weather.c) draws the screen from
-[docs/pictures/weather-display-design.jpeg](docs/pictures/weather-display-design.jpeg):
+[src/epd_weather.c](src/epd_weather.c) draws the screen:
 the date across the top, a circle quartered into the four parts of the day, each
 with an icon, a condition and a temperature, sunrise and sunset in the margins,
 and the moon phase at the foot.
 
-The quadrants run **clockwise** — morning top-left, afternoon top-right, evening
-bottom-right, night bottom-left. That is the mock-up's own geometry: sunrise sits
-at nine o'clock, sunset at three, midnight at the bottom.
+![weather dial](./docs/pictures/anglesc.png)
+
+The circle is a **twenty-four hour dial**: noon at the top, midnight at the foot,
+running clockwise, so morning is upper-left, afternoon upper-right, evening
+lower-right and night lower-left.
+
+Noon and midnight never move, so that divider is always vertical. Sunrise and
+sunset are drawn **where they actually fall**. A six o'clock sunrise lands due
+left and a six o'clock sunset due right, giving the flat horizontal of the
+mock-up; anything else tilts. A late sunrise swings the left divider up above the
+horizontal, an early one dips it below, and the sunset divider does the same on
+the right. The four parts of the day are therefore drawn at the size they really
+are — a long June evening looks long — and the sunrise and sunset icons ride
+their own dividers up and down with them.
+
+Sectors are inked by whether the sun is up: **yellow while it is, black once it
+is not**, with the text and icons black on yellow and white on black. Two
+consequences worth knowing:
+
+- The proportion of yellow *is* the day length. A December dial is mostly black,
+  a June one mostly yellow, and that reads before any of the words do.
+- The noon-to-midnight divider is drawn black above the centre and white below.
+  Above, it separates two yellow sectors; below, two black ones, where a black
+  line would not exist. The sunrise and sunset dividers are not drawn at all —
+  they separate a yellow sector from a black one, and that edge is already the
+  sharpest thing on the screen.
+
+The moon sits wholly inside the rim rather than straddling it as the mock-up
+shows, because the foot of the dial is now black: the glyph is drawn white and
+has to stay on that background. Its label drops below the rim onto the page.
+
+Each sector's contents sit out along the middle of its arc, at a radius computed
+from the width of that sector's own label. A wedge widens as it goes out, so a
+narrow one pushes its contents outward to find room; the test is against the
+group's *innermost corner*, which is the first thing a divider reaches. When even
+the outermost usable radius is too tight — a deep summer evening can be 45° —
+the icon is dropped and the text pushed further out, because a divider drawn
+through the word is worse than no picture.
 
 | Part | Runs from | to |
 |---|---|---|
@@ -199,7 +336,7 @@ once the rotary encoder is driven.
 The firmware calls **`data/2.5/forecast`** — three-hourly, five days — because
 that is what an ordinary OpenWeather key can reach.
 
-One Call (`data/3.0/onecall`) is hourly and richer, and
+One Call (`data/4.0/onecall`) is hourly and richer, and
 [src/weather_parse.c](src/weather_parse.c) still handles it, still under test.
 But it needs its own *One Call by Call* subscription and returns 401 without one:
 
@@ -274,95 +411,3 @@ after dark, a polar day with no sunrise, and a 401 body. The awkward cases need
 no fake clock: the aggregator takes the day boundaries as arguments, so a test
 poses "booted at eight in the evening" by passing different numbers.
 
-### Wiring
-Defaults follow Waveshare's own ESP32-S3 reference wiring. All six are
-`build_flags` in [platformio.ini](platformio.ini) — rewire freely and update
-them to match.
-
-This panel's interface is **nine** wires, not the usual eight — `PWR` is a
-power-control input, and with it floating the panel never powers up.
-
-| Panel | ESP32-S3 GPIO | Macro |
-|---|---|---|
-| VCC / GND | 3V3 / GND | — |
-| DIN | 11 | `EPD_PIN_MOSI` |
-| SCLK | 12 | `EPD_PIN_SCLK` |
-| CS | 10 | `EPD_PIN_CS` |
-| DC | 13 | `EPD_PIN_DC` |
-| RST | 14 | `EPD_PIN_RST` |
-| BUSY | 4 | `EPD_PIN_BUSY` |
-| PWR | 5 | `EPD_PIN_PWR` |
-
-Set `EPD_PIN_PWR` to `-1` only for an older 8-pin panel with no PWR pin.
-
-The panel's mode switch must be in the **4-line SPI** position; the driver does
-not implement 3-line mode.
-
-### Troubleshooting
-BUSY on this panel reads **low while busy** and high when idle — the opposite
-sense of Waveshare's monochrome panels. That makes an unpowered or disconnected
-panel look identical to an idle one, so the driver cross-checks the timing:
-
-- `BUSY stuck low` — the pin is held low past `EPD_BUSY_TIMEOUT_MS`. Usually
-  miswired, or shorted.
-- `refresh finished in N ms` — the refresh "succeeded" far too quickly, so BUSY
-  was never asserted and the panel is not responding at all. Check PWR first,
-  then the mode switch, then DIN/SCLK/CS/DC.
-
-A silent success with a blank panel should not be possible; if you see one,
-that check is what failed.
-
-## Configuration
-Wi-Fi credentials and connection tuning are compile-time parameters, defined as
-`build_flags` in [platformio.ini](platformio.ini) — nothing is hard-coded in the
-sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
-
-| Macro | Default | Purpose |
-|---|---|---|
-| `WIFI_SSID` | *(required)* | Network to join |
-| `WIFI_PASSWORD` | *(required)* | Pre-shared key |
-| `WIFI_HOSTNAME` | `retro-clock-radio` | Name requested from DHCP |
-| `WIFI_AUTH_THRESHOLD` | `WIFI_AUTH_WPA2_PSK` | Weakest acceptable AP security |
-| `WIFI_CONNECT_MAX_RETRY` | `0` | Attempts before reboot; 0 = retry forever |
-| `WIFI_CONNECT_TIMEOUT_MS` | `15000` | Per-attempt deadline for assoc + DHCP |
-| `WIFI_CONNECT_BACKOFF_MIN_MS` | `1000` | Initial delay between attempts |
-| `WIFI_CONNECT_BACKOFF_MAX_MS` | `30000` | Backoff ceiling |
-| `BOOT_LOG_DELAY_MS` | `5000` | Silent pause before the first log line |
-| `NTP_SERVER` | `pool.ntp.org` | NTP server used to set the clock |
-| `TIME_ZONE` | `EST5EDT,M3.2.0,M11.1.0` | Local timezone as a POSIX TZ string |
-| `NTP_SYNC_TIMEOUT_MS` | `30000` | Wait for the first NTP response before continuing |
-| `NTP_SYNC_INTERVAL_MS` | `3600000` | Interval between background re-syncs |
-| `EPD_PIN_SCLK` | `12` | Panel CLK |
-| `EPD_PIN_MOSI` | `11` | Panel DIN |
-| `EPD_PIN_CS` | `10` | Panel CS |
-| `EPD_PIN_DC` | `13` | Panel DC (command/data select) |
-| `EPD_PIN_RST` | `14` | Panel RST |
-| `EPD_PIN_BUSY` | `4` | Panel BUSY (low = busy) |
-| `EPD_PIN_PWR` | `5` | Panel PWR (power control); -1 only on 8-pin panels |
-| `EPD_SPI_HOST` | `SPI2_HOST` | SPI peripheral driving the panel |
-| `EPD_SPI_SPEED_HZ` | `10000000` | SPI clock; the panel is rated to 20 MHz |
-| `EPD_BUSY_TIMEOUT_MS` | `60000` | Ceiling on one BUSY wait (a refresh takes ~25 s) |
-| `OWM_API_KEY` | *(required)* | OpenWeather API key |
-| `OWM_FORECAST_PATH` | `/data/2.5/forecast` | Endpoint; `/data/3.0/onecall` needs a paid subscription |
-| `OWM_LATITUDE` | *(required)* | Latitude to forecast for, decimal degrees, quoted |
-| `OWM_LONGITUDE` | *(required)* | Longitude, decimal degrees, quoted |
-| `OWM_UNITS` | `imperial` | `standard`, `metric` or `imperial` |
-| `OWM_UNITS_ENUM` | `WX_UNITS_IMPERIAL` | The same choice for the code, which cannot compare strings |
-| `OWM_POLL_INTERVAL_S` | `1800` | Seconds between fetches; 1800 is 48 calls a day |
-| `OWM_MAX_CALLS_PER_DAY` | `200` | Daily cap, well under the 1000/day free tier |
-| `OWM_MIN_CALL_INTERVAL_S` | `600` | Floor between attempts; what stops a reboot loop |
-| `WEATHER_MOCK` | `0` | 1 = render a canned response and make no network call |
-
-Omitting `WIFI_SSID`, `WIFI_PASSWORD`, `OWM_API_KEY`, `OWM_LATITUDE` or
-`OWM_LONGITUDE` fails the build with an `#error` rather than silently producing
-firmware that cannot connect or cannot forecast. Latitude and longitude are
-quoted strings, not numbers: they are only ever pasted into a URL, and that
-sidesteps any argument about how a float is formatted.
-
-To keep credentials out of version control, comment those two flags out and
-export them at build time instead:
-
-```sh
-export PLATFORMIO_BUILD_FLAGS='-D WIFI_SSID=\"my-ssid\" -D WIFI_PASSWORD=\"my-pass\"'
-pio run -t upload -t monitor
-```

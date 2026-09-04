@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define WX_ICON_SIZE   60
+#define WX_ICON_SIZE   48
 #define WX_ICON_STRIDE ((WX_ICON_SIZE + 7) / 8)
 
 /* Order must match the emission order in tools/make_weather_icons.py. */

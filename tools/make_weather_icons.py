@@ -18,7 +18,7 @@ import math
 import sys
 from pathlib import Path
 
-SIZE = 60               # every icon is square and this wide
+SIZE = 48               # every icon is square and this wide
 STROKE = 2              # line weight
 SUB = 3                 # supersamples per axis
 OUT = Path("src/weather_icons_data.c")
