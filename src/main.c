@@ -4,11 +4,11 @@
  * Hardware (see README.md "Component List"):
  *   - ESP32-S3-DevKitC-1 v1.1 (N16R8: 16 MB flash, 8 MB PSRAM)
  *   - Waveshare 5.83" e-paper (G) display, 648x480, four colour, SPI
- *   - Adafruit I2C STEMMA QT rotary encoder breakout  (not driven yet)
+ *   - Adafruit I2C STEMMA QT rotary encoder breakout, for choosing a screen
  *
  * This stage bootstraps the microcontroller, joins the Wi-Fi network configured
- * in platformio.ini, sets the real-time clock from NTP, and puts the daily
- * weather on the e-paper panel.
+ * in platformio.ini, sets the real-time clock from NTP, and hands the e-paper
+ * panel to the screen manager. Turning the knob walks the ring of screens.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -30,6 +30,9 @@
 #include "epd_clockface.h"
 #include "epd_pattern.h"
 #include "refresh_count.h"
+#include "refresh_gauge.h"
+#include "rotary_encoder.h"
+#include "screen_manager.h"
 #include "time_sync.h"
 #include "weather_display.h"
 #include "wifi_sta.h"
@@ -148,15 +151,35 @@ void app_main(void)
     }
 
     /*
-     * The weather screen owns the panel for now. The clock face is still built
-     * and still works -- clock_display_start() brings it up -- and the two will
-     * be switchable once the rotary encoder is driven.
-     *
-     * Started whether or not the network came up: with no forecast yet the task
-     * puts up an empty dial and keeps trying.
+     * The content tasks first, then the manager that arbitrates between them.
+     * Neither draws anything on its own; both are started whether or not the
+     * network came up, since each has something to put up while it waits.
      */
     if (epd_err == ESP_OK) {
+        ESP_ERROR_CHECK(clock_display_start());
         ESP_ERROR_CHECK(weather_display_start());
+
+        /*
+         * The countdown strip before the manager that drives it. Not fatal:
+         * without it a deferred screen change simply happens in silence, which
+         * is what the firmware did until now.
+         */
+        const esp_err_t gauge_err = refresh_gauge_start();
+        if (gauge_err != ESP_OK) {
+            ESP_LOGW(TAG, "no countdown strip: %s", esp_err_to_name(gauge_err));
+        }
+
+        ESP_ERROR_CHECK(screen_manager_start(SCREEN_CLOCK));
+
+        /*
+         * No knob fitted is not a fault: the screens still change themselves,
+         * there is just no way to choose between them.
+         */
+        const esp_err_t enc_err = rotary_encoder_start(screen_manager_step);
+        if (enc_err != ESP_OK) {
+            ESP_LOGW(TAG, "no rotary encoder: %s -- screens cannot be switched",
+                     esp_err_to_name(enc_err));
+        }
     }
 
     while (true) {

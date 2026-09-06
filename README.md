@@ -8,9 +8,11 @@
 | [Rotary Encoder](https://www.adafruit.com/product/5880) | Adafruit I2C Stemma QT Rotary Encoder Breakout with Encoder - STEMMA QT / Qwiic |
 
 ## Wiring
-Defaults follow Waveshare's own ESP32-S3 reference wiring. All six are
-`build_flags` in [platformio.ini](platformio.ini) — rewire freely and update
-them to match.
+Every pin is a `build_flag` in [platformio.ini](platformio.ini) — rewire freely
+and update the flags to match.
+
+### E-paper panel
+Defaults follow Waveshare's own ESP32-S3 reference wiring.
 
 This panel's interface is **nine** wires, not the usual eight — `PWR` is a
 power-control input, and with it floating the panel never powers up.
@@ -31,7 +33,7 @@ Set `EPD_PIN_PWR` to `-1` only for an older 8-pin panel with no PWR pin.
 The panel's mode switch must be in the **4-line SPI** position; the driver does
 not implement 3-line mode.
 
-### Troubleshooting
+#### Panel troubleshooting
 BUSY on this panel reads **low while busy** and high when idle — the opposite
 sense of Waveshare's monochrome panels. That makes an unpowered or disconnected
 panel look identical to an idle one, so the driver cross-checks the timing:
@@ -44,6 +46,55 @@ panel look identical to an idle one, so the driver cross-checks the timing:
 
 A silent success with a blank panel should not be possible; if you see one,
 that check is what failed.
+
+### Rotary encoder
+Four wires over a STEMMA QT cable, which is most of the appeal: no quadrature
+decoding, no debouncing, one connector.
+
+| Encoder | ESP32-S3 GPIO | Macro |
+|---|---|---|
+| 3V3 / GND | 3V3 / GND | — |
+| SDA | 8 | `ENC_PIN_SDA` |
+| SCL | 9 | `ENC_PIN_SCL` |
+
+GPIO 8 and 9 are adjacent on the header, are not strapping pins, and sit at the
+opposite end of the board from the panel's 10–14 block, so the two cables leave
+from different sides. The breakout answers at `0x36`, with solder jumpers for
+`0x36`–`0x3D`. I2C is a bus, so a real-time clock or an audio codec added later
+costs no further pins.
+
+The breakout also carries a NeoPixel under the knob, on the same seesaw and so
+on the same two wires — see [Choosing a screen](#choosing-a-screen) for what it
+is used to say.
+
+The QT connector carries only SDA, SCL, 3V3 and GND, so the breakout's `INT`
+output is **not** wired and the encoder is polled rather than interrupt driven.
+Little is lost by that: the seesaw counts detents and latches the button press
+itself, so one delta read after a 25-second panel refresh still reports every
+click made during it.
+
+### Countdown strip
+Six WS2812s in a line, one data wire, driven by RMT.
+
+| Strip | ESP32-S3 GPIO | Macro |
+|---|---|---|
+| VDD / GND | **3V3** / GND | — |
+| DIN | 21 | `GAUGE_PIN` |
+
+**Power it from 3V3, not 5V.** A WS2812 wants 0.7 × V<sub>DD</sub> on its data
+pin: against a 5 V rail that is 3.5 V, and GPIO 21 delivers 3.3 — which is the
+classic intermittent-first-pixel failure. On 3V3 the threshold drops to 2.31 V
+with comfortable margin. At `GAUGE_BRIGHTNESS` on a single colour the six pixels
+draw well under 50 mA; pushing toward 255 on all three channels approaches
+360 mA and would need the 5 V rail plus a level shifter.
+
+GPIO 21 sits at the far end of the header from both the panel block (10–14) and
+the I2C pair, so the strip cable routes on its own. See
+[The countdown strip](#the-countdown-strip) for what it displays.
+
+Pins to leave alone on this board: 19/20 are native USB, 43/44 the console UART,
+26–32 the internal flash, 33–37 the PSRAM on an N16R8 module, and 0, 3, 45 and
+46 are strapping pins.
 
 ### KiCad
 
@@ -80,6 +131,22 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `EPD_SPI_HOST` | `SPI2_HOST` | SPI peripheral driving the panel |
 | `EPD_SPI_SPEED_HZ` | `10000000` | SPI clock; the panel is rated to 20 MHz |
 | `EPD_BUSY_TIMEOUT_MS` | `60000` | Ceiling on one BUSY wait (a refresh takes ~25 s) |
+| `ENC_PIN_SDA` | `8` | Encoder SDA |
+| `ENC_PIN_SCL` | `9` | Encoder SCL |
+| `ENC_I2C_PORT` | `I2C_NUM_0` | I2C peripheral the encoder hangs off |
+| `ENC_I2C_SPEED_HZ` | `100000` | Bus clock; seesaw is an ATtiny bit-banging it |
+| `ENC_I2C_ADDR` | `0x36` | seesaw address; jumpers give 0x36–0x3D |
+| `ENC_POLL_INTERVAL_MS` | `50` | How often the encoder is read |
+| `ENC_COUNTS_PER_DETENT` | `1` | Counts the breakout reports per physical click |
+| `ENC_REVERSED` | `0` | 1 = clockwise walks the ring backwards |
+| `ENC_LED_PIN` | `6` | seesaw pin the knob's NeoPixel is wired to |
+| `ENC_LED_BRIGHTNESS` | `40` | Out of 255; full brightness is painful |
+| `ENC_FLASH_MS` | `150` | How long the knob lights up per turn |
+| `SCREEN_SETTLE_MS` | `1200` | Quiet time on the knob before the new screen is drawn |
+| `GAUGE_PIN` | `21` | WS2812 countdown strip data line |
+| `GAUGE_LED_COUNT` | `6` | Pixels on the strip |
+| `GAUGE_BRIGHTNESS` | `40` | Out of 255, matching the knob |
+| `GAUGE_TICK_MS` | `200` | How often the remaining time is re-read |
 | `OWM_API_KEY` | *(required)* | OpenWeather API key |
 | `OWM_FORECAST_PATH` | `/data/2.5/forecast` | Endpoint; `/data/4.0/onecall` requires a credit card on file |
 | `OWM_LATITUDE` | *(required)* | Latitude to forecast for, decimal degrees, quoted |
@@ -107,10 +174,10 @@ pio run -t upload -t monitor
 
 
 ## Firmware Organization
-Bootstraps the ESP32-S3 (NVS, TCP/IP stack, default event loop), paints a
-four-colour test pattern on the e-paper panel, joins a Wi-Fi network as a
-station, then sets the real-time clock from NTP. The rotary encoder is not
-driven yet.
+Bootstraps the ESP32-S3 (NVS, TCP/IP stack, default event loop), brings up the
+e-paper panel, joins a Wi-Fi network as a station, sets the real-time clock from
+NTP, and hands the panel to the screen manager. Turning the rotary encoder walks
+the ring of screens.
 
 - [src/main.c](src/main.c) — boot banner, bring-up, link/clock heartbeat
 - [src/wifi_sta.c](src/wifi_sta.c) — station bring-up, retry/backoff, auto-reconnect
@@ -128,6 +195,9 @@ driven yet.
 - [src/weather_display.c](src/weather_display.c) — poll, compare, redraw
 - [src/weather_quota.c](src/weather_quota.c) — API call budget in NVS
 - [src/clock_display.c](src/clock_display.c) — five-minute update task
+- [src/screen_manager.c](src/screen_manager.c) — which screen owns the panel, and when it may be written
+- [src/rotary_encoder.c](src/rotary_encoder.c) — the seesaw encoder over I2C
+- [src/refresh_gauge.c](src/refresh_gauge.c) — the WS2812 countdown strip over RMT
 - [src/refresh_count.c](src/refresh_count.c) — lifetime refresh counter in NVS
 
 ## Display
@@ -152,12 +222,113 @@ box* — (0,0) is its top-left, not the panel's — and clip to it, so the dead
 margin can only ever carry the `paint_clear()` colour. Layout code works in the
 box and never has to know about the rest.
 
-`app_main()` puts the clock face up first, before Wi-Fi, so a wiring fault
-surfaces immediately rather than behind a network timeout. Swapping the
-`epd_clockface_show()` call for `epd_pattern_show()` boots the test pattern
-instead. Neither an init failure nor a
-BUSY timeout is fatal. A full refresh takes roughly 25 seconds, during which
-`app_main()` blocks.
+`app_main()` brings the panel up before Wi-Fi, so a wiring fault surfaces
+immediately rather than behind a network timeout. Neither an init failure nor a
+BUSY timeout is fatal — the clock keeps time without a screen. Nothing is drawn
+until the screen manager starts; calling `epd_pattern_show()` there instead
+boots the test pattern. A full refresh takes roughly 25 seconds and blocks
+whichever task runs it.
+
+### Choosing a screen
+[src/screen_manager.c](src/screen_manager.c) is the only thing that writes to the
+panel. The screens are a **ring** — clock, then weather — and turning the encoder
+walks it: clockwise forward, anticlockwise back, both wrapping. With two screens
+that is a toggle, but the order in `SCREENS[]` is what a third screen slots into,
+so adding one means a line in that table and a draw function, nothing else. The
+bring-up test pattern is deliberately not in the ring.
+
+Nothing else needs to be a screen manager, and that is the point: a refresh
+blocks for 25 seconds and the datasheet asks for 180 between them, so *when
+anything may be drawn at all* is one global question. Both content tasks
+([clock_display.c](src/clock_display.c), [weather_display.c](src/weather_display.c))
+stopped drawing and now only say when what they would draw has changed; a change
+to a screen that is not showing is remembered and drawn when the knob arrives
+there.
+
+Two rules follow from those 25 seconds, and neither is optional:
+
+- **A turn is not acted on at once.** The ring has to stand still for
+  `SCREEN_SETTLE_MS` first. Spinning past three screens is one refresh, on the
+  screen the hand stopped at, rather than three refreshes ending in the same
+  place.
+- **A turn made mid-refresh is discarded, not queued.** Queueing it would move
+  the screen half a minute after the knob stopped, and a knob idly spun through
+  a refresh would leave a run of them waiting. The encoder task keeps reading
+  during a refresh precisely so those counts are consumed and thrown away rather
+  than sitting in the seesaw waiting to fire.
+
+The 180-second floor applies to a knob turn like any other refresh, so a second
+switch inside three minutes waits. In practice the settle window absorbs most of
+that: the case it bites is two deliberate turns a minute apart, and the panel is
+rated for a finite number of refreshes.
+
+#### What the knob's light means
+Between the settle delay, the 180-second floor and a 25-second refresh, a turn
+can be accepted and still change nothing visible for minutes. On a screen that
+slow, silence is indistinguishable from a broken encoder, so the NeoPixel under
+the knob answers immediately — traffic lights, because that is what the hand on
+the knob is actually asking:
+
+| | Meaning |
+|---|---|
+| 🟢 **green** | Accepted, and drawing as soon as you let go of the knob |
+| 🟡 **amber** | Accepted, but the panel's 180-second floor has not elapsed — the [countdown strip](#the-countdown-strip) shows how much longer |
+| 🔴 **red** | Discarded: the panel is mid-refresh |
+
+The verdict is decided by `screen_manager_step()` at the instant of the turn and
+handed back to the encoder driver, which owns the pixel because it is on the same
+seesaw. Nothing outside [rotary_encoder.c](src/rotary_encoder.c) knows a NeoPixel
+exists. Green accounts for the settle window in its arithmetic — that time counts
+towards the floor, so a turn a second short of 180 is honestly green rather than
+amber-then-immediate.
+
+The flash is re-armed rather than queued, so keeping the knob turning during a
+refresh reads as steady red rather than a stutter, and it is timed out by the
+poll loop rather than slept through — a turn is never waiting behind a blink.
+
+#### The countdown strip
+Amber says you are waiting. Six WS2812s say **how much longer**. When a screen
+change is accepted but held off by the 180-second floor, the strip fills and then
+empties as the wait runs down, all six going dark as the refresh begins.
+
+The colour is the screen that is *coming*, not the one showing — 🔵 blue for the
+weather, 🟡 yellow for the clock. Those live in `SCREENS[]` in
+[screen_manager.c](src/screen_manager.c) beside the name and draw function, on the
+same principle that put the knob's verdict colours inside the encoder driver:
+whoever owns the vocabulary owns the mapping. The gauge knows only red, green and
+blue.
+
+The scale is **relative** — always six at the start, emptying over whatever the
+wait happens to be. Six means "the wait has begun", not "180 seconds". It only
+appears for a deferred *screen change*: a content refresh held off by the same
+floor (the hands stepping, a new forecast) waits in the dark, because a strip
+lighting up untouched would read as the device acting on its own.
+
+Two details in [screen_manager.c](src/screen_manager.c) are load-bearing and easy
+to undo by accident:
+
+- **The countdown is anchored in module state, not measured afresh each time the
+  wait is entered.** The clock face pokes the screen manager every five minutes
+  whether or not it is showing, so a three-minute wait is *more likely than not*
+  to be interrupted by something unrelated to the knob. The manager settles, finds
+  the same change still pending, and resumes — and a countdown restarted at that
+  moment would refill the strip. The user would watch 6, 5, 4, 6, 5, 4. Anchored,
+  it resumes at 4.
+- **An interruption puts the strip out but keeps the countdown.** So the visible
+  behaviour is a blink: dark for one settle window, then relit at the level it had
+  reached, or in a new colour if the knob moved somewhere else.
+
+The driver in [refresh_gauge.c](src/refresh_gauge.c) is hand-rolled on `esp_driver_rmt`
+rather than pulling in the `led_strip` managed component, which would have been the
+first thing in this tree not built from framework-espidf. Six pixels is eighteen
+bytes. Three of its constants are not arbitrary: the RMT channel takes **all four**
+TX memory blocks so the whole frame clocks out of hardware with no refill interrupt
+racing the Wi-Fi stack; the bit timings are cut at 20 MHz rather than 10 so they
+land inside the WS2812, WS2812B *and* SK6812 windows; and every frame is preceded by
+a 300 µs low gap. That last one looks redundant — frames are a fifth of a second
+apart — but on the one path where a countdown is interrupted, the clear follows its
+own show by microseconds, and without the gap the strip reads the second frame as a
+continuation of the first and stays lit with no way to put it out.
 
 ### Test pattern
 The boot pattern is a bring-up check, laid out inside the 478 x 460 usable box
@@ -325,12 +496,13 @@ Thirteen conditions share ten glyphs; the eight moon phases are picked from
 Two different rates, deliberately. The forecast is fetched every **30 minutes**
 (48 calls a day), but the panel is only refreshed when the screen would actually
 differ — an unchanged forecast costs nothing, which matters for a panel rated
-for a million refreshes. The 180 s floor from the panel datasheet is enforced
-here as it is on the clock face.
+for a million refreshes. Polling carries on regardless of which screen is
+showing; a forecast that changes while the clock face is up is drawn when the
+knob next arrives at the weather. The 180 s floor is enforced once, in
+[screen_manager.c](src/screen_manager.c), for every screen.
 
-The weather screen owns the panel for now. The clock face is still built and
-still works; `clock_display_start()` brings it up, and the two become switchable
-once the rotary encoder is driven.
+The board boots on the weather screen — the `screen_manager_start()` argument in
+[src/main.c](src/main.c).
 
 ### Which endpoint, and why
 The firmware calls **`data/2.5/forecast`** — three-hourly, five days — because

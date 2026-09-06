@@ -7,9 +7,9 @@
 
 #include "epd_clockface.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "screen_manager.h"
 #include "time_sync.h"
 
 static const char *TAG = "clock-display";
@@ -17,33 +17,18 @@ static const char *TAG = "clock-display";
 #define STEP_MINUTES CLOCK_DISPLAY_STEP_MINUTES
 #define STEP_SECONDS (STEP_MINUTES * 60)
 
-/*
- * The floor the panel datasheet puts on how often it may be updated. The
- * five-minute cadence clears it comfortably; this only bites just after boot,
- * where the first refresh and the first step change can fall close together.
- */
-#define MIN_REFRESH_INTERVAL_S 180
-
 /* How often to look again while the clock is still unset. */
 #define UNSET_CLOCK_RETRY_S 15
 
 /*
- * The whole display pipeline runs on this task -- drawing, the SPI transfer,
- * and the NVS write the refresh hook does -- so it is not a small stack.
+ * This task only watches the clock and says when the hands would move; the
+ * drawing happens on the screen manager's task. It needs very little.
  */
-#define TASK_STACK 6144
-#define TASK_PRIO  4
+#define TASK_STACK 3072
+#define TASK_PRIO  3
 
-/*
- * What the glass is showing: minutes since midnight, SLOT_NONE for the bare
- * dial, SLOT_UNDRAWN before anything has been put up at all. Distinguishing the
- * last two is what makes the bare dial get drawn once rather than never.
- */
-#define SLOT_NONE    (-1)
-#define SLOT_UNDRAWN (-2)
-
-static int s_shown_slot = SLOT_UNDRAWN;
-static int64_t s_last_refresh_us;
+/* The bare dial, drawn while the real-time clock is still unset. */
+#define SLOT_NONE (-1)
 
 /*
  * The five-minute mark nearest the current time -- nearest, not the one just
@@ -82,52 +67,36 @@ static int seconds_to_next_slot(void)
     return (into_step < half) ? (half - into_step) : (STEP_SECONDS + half - into_step);
 }
 
-/* Hold off until the panel's minimum interval has elapsed since the last refresh. */
-static void respect_min_interval(void)
+esp_err_t clock_display_draw(void)
 {
-    if (s_last_refresh_us == 0) {
-        return;
-    }
+    /*
+     * The slot is worked out here rather than handed over by the task, so that
+     * arriving at this screen after an hour on another one shows the time now
+     * and not the time the hands last moved.
+     */
+    const int slot = current_slot();
 
-    const int64_t since_s = (esp_timer_get_time() - s_last_refresh_us) / 1000000;
-    if (since_s >= MIN_REFRESH_INTERVAL_S) {
-        return;
-    }
-
-    const int wait_s = (int)(MIN_REFRESH_INTERVAL_S - since_s);
-    ESP_LOGI(TAG, "holding %d s to keep %d s between refreshes", wait_s,
-             MIN_REFRESH_INTERVAL_S);
-    vTaskDelay(pdMS_TO_TICKS(wait_s * 1000));
+    return (slot == SLOT_NONE) ? epd_clockface_show()
+                               : epd_clockface_show_time(slot / 60, slot % 60);
 }
 
 static void clock_display_task(void *arg)
 {
     (void)arg;
 
-    while (true) {
-        respect_min_interval();
+    /* What was last announced, which is not necessarily what is on the glass. */
+    int announced = SLOT_NONE - 1;
 
+    while (true) {
         const int slot = current_slot();
 
-        if (slot != s_shown_slot) {
-            const esp_err_t err = (slot == SLOT_NONE)
-                                      ? epd_clockface_show()
-                                      : epd_clockface_show_time(slot / 60, slot % 60);
-            if (err == ESP_OK) {
-                s_shown_slot = slot;
-                s_last_refresh_us = esp_timer_get_time();
-            } else {
-                /* Leave s_shown_slot alone so the next pass tries again. */
-                ESP_LOGE(TAG, "could not update the display: %s", esp_err_to_name(err));
-            }
+        if (slot != announced) {
+            announced = slot;
+            screen_manager_content_changed(SCREEN_CLOCK);
         }
 
-        /*
-         * A refresh takes about 25 s, so the wait is computed after it, not
-         * before: the next step is however far away it is by then.
-         */
-        const int wait_s = (slot == SLOT_NONE) ? UNSET_CLOCK_RETRY_S : seconds_to_next_slot();
-        vTaskDelay(pdMS_TO_TICKS(wait_s * 1000));
+        vTaskDelay(pdMS_TO_TICKS(
+            ((slot == SLOT_NONE) ? UNSET_CLOCK_RETRY_S : seconds_to_next_slot()) * 1000));
     }
 }
 

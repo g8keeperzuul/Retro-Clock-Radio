@@ -10,9 +10,10 @@
 #include "epd_weather.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "screen_manager.h"
 #include "time_sync.h"
 #include "weather_aggregate.h"
 #include "weather_api.h"
@@ -30,22 +31,23 @@ static const char *TAG = "wx-display";
 #define OWM_UNITS_ENUM WX_UNITS_IMPERIAL
 #endif
 
-/* The panel datasheet asks for at least this long between refreshes. */
-#define MIN_REFRESH_INTERVAL_S 180
-
 /* How soon to look again after something went wrong or the clock was unset. */
 #define RETRY_INTERVAL_S 60
 
 /*
- * The whole pipeline runs on this task: a TLS handshake, a 40 KB parse, the
- * drawing, and a 25 second blocking SPI refresh. mbedtls alone wants around
- * 5 KB of stack.
+ * A TLS handshake and a 40 KB parse run on this task; mbedtls alone wants
+ * around 5 KB of stack. The drawing does not -- that is the screen manager's.
  */
 #define TASK_STACK 8192
 #define TASK_PRIO  3
 
-static wx_report_t s_shown;
-static int64_t s_last_refresh_us;
+/*
+ * The latest good forecast, and the lock that lets the screen manager's task
+ * copy it out while this one is writing a new one in. Held only long enough to
+ * copy the struct, never across a fetch or a refresh.
+ */
+static wx_report_t s_report;
+static SemaphoreHandle_t s_report_lock;
 
 /*
  * cJSON allocates a node per value, each well under the 16 KB threshold that
@@ -116,7 +118,7 @@ static bool poll_forecast(wx_report_t *out)
      * and holds no history, so by evening there is nothing left to aggregate
      * for the morning.
      */
-    const wx_status_t agg = weather_aggregate(fc, &cfg, s_shown.valid ? &s_shown : NULL,
+    const wx_status_t agg = weather_aggregate(fc, &cfg, s_report.valid ? &s_report : NULL,
                                               out);
     if (agg != WX_OK) {
         ESP_LOGE(TAG, "could not reduce the forecast: %s", wx_status_str(agg));
@@ -131,29 +133,32 @@ done:
     return ok;
 }
 
-/* Hold off until the panel's minimum interval has passed. */
-static void respect_min_interval(void)
+esp_err_t weather_display_draw(void)
 {
-    if (s_last_refresh_us == 0) {
-        return;
+    /*
+     * Copy under the lock rather than drawing under it: the refresh takes
+     * twenty-five seconds, and holding the poll task off for that long would
+     * eventually cost a fetch. A forecast that lands mid-refresh simply marks
+     * the screen stale again and is drawn on the next pass.
+     */
+    wx_report_t snapshot;
+
+    if (s_report_lock == NULL) {
+        /* Drawn before the poll task exists: an empty dial, which is the point. */
+        memset(&snapshot, 0, sizeof(snapshot));
+        return epd_weather_show(&snapshot);
     }
 
-    const int64_t since_s = (esp_timer_get_time() - s_last_refresh_us) / 1000000;
-    if (since_s >= MIN_REFRESH_INTERVAL_S) {
-        return;
-    }
+    xSemaphoreTake(s_report_lock, portMAX_DELAY);
+    snapshot = s_report;
+    xSemaphoreGive(s_report_lock);
 
-    const int wait_s = (int)(MIN_REFRESH_INTERVAL_S - since_s);
-    ESP_LOGI(TAG, "holding %d s to keep %d s between refreshes", wait_s,
-             MIN_REFRESH_INTERVAL_S);
-    vTaskDelay(pdMS_TO_TICKS(wait_s * 1000));
+    return epd_weather_show(&snapshot);
 }
 
 static void weather_display_task(void *arg)
 {
     (void)arg;
-
-    bool drawn_anything = false;
 
     while (true) {
         wx_report_t fresh;
@@ -161,34 +166,28 @@ static void weather_display_task(void *arg)
 
         const bool got = poll_forecast(&fresh);
 
-        /*
-         * Redraw only when the glass would actually differ. At a half-hourly
-         * poll most fetches return the same forecast, and the panel is rated
-         * for a limited number of refreshes -- see refresh_count.c.
-         */
-        const bool changed = got && !wx_report_equal(&fresh, &s_shown);
+        if (got) {
+            /*
+             * Announce only when the glass would actually differ. At a
+             * half-hourly poll most fetches return the same forecast, and the
+             * panel is rated for a limited number of refreshes -- see
+             * refresh_count.c. The report is stored either way, so its
+             * timestamps stay current.
+             */
+            const bool changed = !wx_report_equal(&fresh, &s_report);
 
-        if (changed || !drawn_anything) {
-            respect_min_interval();
+            xSemaphoreTake(s_report_lock, portMAX_DELAY);
+            s_report = fresh;
+            xSemaphoreGive(s_report_lock);
 
-            const wx_report_t *draw = got ? &fresh : &s_shown;
-            const esp_err_t err = epd_weather_show(draw);
-
-            if (err == ESP_OK) {
-                s_shown = *draw;
-                s_last_refresh_us = esp_timer_get_time();
-                drawn_anything = true;
+            if (changed) {
+                screen_manager_content_changed(SCREEN_WEATHER);
             } else {
-                ESP_LOGE(TAG, "could not update the display: %s", esp_err_to_name(err));
+                ESP_LOGI(TAG, "forecast unchanged; leaving the panel alone");
             }
-        } else if (got) {
-            ESP_LOGI(TAG, "forecast unchanged; leaving the panel alone");
-            s_shown = fresh;    /* keep the timestamps current */
         }
 
-        const int wait_s = (got || drawn_anything) ? OWM_POLL_INTERVAL_S
-                                                   : RETRY_INTERVAL_S;
-        vTaskDelay(pdMS_TO_TICKS(wait_s * 1000));
+        vTaskDelay(pdMS_TO_TICKS((got ? OWM_POLL_INTERVAL_S : RETRY_INTERVAL_S) * 1000));
     }
 }
 
@@ -197,9 +196,16 @@ esp_err_t weather_display_start(void)
     install_json_hooks();
     weather_quota_init();
 
+    s_report_lock = xSemaphoreCreateMutex();
+    if (s_report_lock == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
     const BaseType_t ok = xTaskCreate(weather_display_task, "wx-display", TASK_STACK,
                                       NULL, TASK_PRIO, NULL);
     if (ok != pdPASS) {
+        vSemaphoreDelete(s_report_lock);
+        s_report_lock = NULL;
         return ESP_ERR_NO_MEM;
     }
 

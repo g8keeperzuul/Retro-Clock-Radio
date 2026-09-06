@@ -6,6 +6,9 @@
  * refreshing are deliberately separate rates: the forecast is fetched every half
  * hour, but an unchanged forecast costs no panel refresh, and the panel is rated
  * for a finite number of those.
+ *
+ * The refresh itself belongs to screen_manager.c, which decides whether the
+ * weather is the screen showing and when the panel may next be written to.
  */
 #pragma once
 
@@ -16,13 +19,21 @@ extern "C" {
 #endif
 
 /*
- * Start the task. Returns once it is running, not once anything is on the
- * glass -- the first refresh takes the better part of half a minute.
+ * Start the task. It draws nothing itself: it fetches, and tells the screen
+ * manager when the forecast has actually changed, which redraws only if the
+ * weather is the screen showing.
  *
  * Safe to call with the clock unset or the network down: the task waits and
- * retries, and puts up an empty dial in the meantime.
+ * retries, and an empty dial goes up in the meantime.
  */
 esp_err_t weather_display_start(void);
+
+/*
+ * Put the latest forecast on the panel. Blocks for the length of a refresh,
+ * about twenty-five seconds. Called by the screen manager, which serialises
+ * the panel; nothing else should call it.
+ */
+esp_err_t weather_display_draw(void);
 
 #ifdef __cplusplus
 }
