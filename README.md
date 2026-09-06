@@ -298,6 +298,8 @@ same principle that put the knob's verdict colours inside the encoder driver:
 whoever owns the vocabulary owns the mapping. The gauge knows only red, green and
 blue.
 
+If there is no current refresh delay on the display (because it hasn't been updated in more than 3 minutes), then the LED countdown will never light up, as there is no need for it, since the screen change will happen immediately. 
+
 The scale is **relative** — always six at the start, emptying over whatever the
 wait happens to be. Six means "the wait has begun", not "180 seconds". It only
 appears for a deferred *screen change*: a content refresh held off by the same
