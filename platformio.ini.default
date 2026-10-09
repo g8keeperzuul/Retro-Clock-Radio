@@ -194,6 +194,13 @@ build_flags =
     -D ENC_COUNTS_PER_DETENT=1
     -D ENC_REVERSED=0
 
+    ; Detents in one revolution of the encoder. Not a preference -- it is what
+    ; the part soldered to the breakout actually has, and it is what makes one
+    ; turn of the knob walk the screens exactly once. The dial is divided by
+    ; the number of screens, so four screens take five detents each; add a
+    ; fifth screen and they become four each, with nothing to edit here.
+    -D ENC_POSITIONS=20
+
     ; The NeoPixel under the knob, which reports what became of each turn: green
     ; drawing now, amber accepted but held off by the 180 s panel floor, red
     ; thrown away because the panel is mid-refresh. Pin 6 is where the breakout

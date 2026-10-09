@@ -42,6 +42,15 @@ static const char *TAG = "screen";
 #endif
 
 /*
+ * Detents in one revolution of the encoder. A property of the part soldered to
+ * the breakout, not a preference: it is what makes one turn of the knob walk
+ * the screens exactly once.
+ */
+#ifndef ENC_POSITIONS
+#define ENC_POSITIONS 20
+#endif
+
+/*
  * How long the diagnostics screen stays up before handing the panel back. It
  * is a screen you glance at, not one to leave a clock radio showing.
  */
@@ -89,8 +98,9 @@ static const struct {
     [SCREEN_CLOCK]    = {"clock",    clock_display_draw,            1, 1, 0},  /* yellow */
     [SCREEN_WEATHER]  = {"weather",  weather_display_draw,          0, 0, 1},  /* blue   */
     [SCREEN_FORECAST] = {"forecast", weather_display_draw_forecast, 0, 1, 1},  /* cyan   */
-    [SCREEN_STATUS]   = {"status",   epd_status_show,               1, 0, 1,   /* violet */
-                         STATUS_LINGER_S, SCREEN_CLOCK},
+    [SCREEN_STATUS]   = {"status",   epd_status_show,               1, 0, 1},  /* violet */                         
+//    [SCREEN_STATUS]   = {"status",   epd_status_show,               1, 0, 1,   /* violet */
+//                         STATUS_LINGER_S, SCREEN_CLOCK},
 };
 
 static TaskHandle_t s_task;
@@ -141,13 +151,49 @@ static int64_t s_linger_deadline_us;
  */
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 
-static screen_id_t ring_step(screen_id_t from, int detents)
+/*
+ * Where the dial is pointing, 0 to ENC_POSITIONS - 1.
+ *
+ * The encoder has twenty detents to a revolution and the ring has four screens,
+ * so a screen is five detents wide and one turn of the knob walks the lot
+ * exactly once. Turning within a screen's own five changes nothing, which is
+ * the point: the dial has somewhere to be, rather than every click moving the
+ * panel.
+ *
+ * Software's notion, not the encoder's -- a quadrature encoder has no absolute
+ * reference and seesaw reports a running count, so this is that count folded
+ * into a revolution. That also means it can be re-seated whenever the screen is
+ * changed by something other than the knob.
+ */
+static int s_position;
+
+static int wrap_position(int position)
 {
-    int n = ((int)from + detents) % SCREEN_COUNT;
-    if (n < 0) {
-        n += SCREEN_COUNT;
-    }
-    return (screen_id_t)n;
+    position %= ENC_POSITIONS;
+    return (position < 0) ? position + ENC_POSITIONS : position;
+}
+
+/*
+ * The screen a position falls in. Integer arithmetic rather than a table, so
+ * adding a screen re-divides the dial on its own: five screens would take four
+ * detents each, three would take seven, seven and six. Nothing to keep in step.
+ */
+static screen_id_t screen_for_position(int position)
+{
+    const int n = (position * SCREEN_COUNT) / ENC_POSITIONS;
+    return (screen_id_t)((n >= SCREEN_COUNT) ? SCREEN_COUNT - 1 : n);
+}
+
+/*
+ * The middle of a screen's span. Used to re-seat the dial when the screen
+ * changes without the knob -- the diagnostics screen showing itself out, for
+ * instance. Without it the dial would still be pointing at the old screen, and
+ * the next click would either do nothing or jump somewhere unexpected; the
+ * middle leaves the most room to turn either way before the screen moves.
+ */
+static int position_for_screen(screen_id_t screen)
+{
+    return (2 * (int)screen + 1) * ENC_POSITIONS / (2 * SCREEN_COUNT);
 }
 
 screen_id_t screen_manager_active(void)
@@ -195,6 +241,7 @@ enc_verdict_t screen_manager_step(int detents)
     if (!refreshing) {
         s_pending += detents;
     }
+    const int landing = wrap_position(s_position + s_pending);
     portEXIT_CRITICAL(&s_lock);
 
     if (refreshing) {
@@ -203,6 +250,16 @@ enc_verdict_t screen_manager_step(int detents)
     }
 
     xTaskNotifyGive(s_task);
+
+    /*
+     * Most turns land inside the span the dial is already in, and nothing will
+     * come of them. Saying so is the whole reason this verdict exists: a green
+     * flash followed by a panel that never changes reads as a fault, where
+     * "registered, still on this screen, keep turning" reads as an instrument.
+     */
+    if (screen_for_position(landing) == s_active) {
+        return ENC_NOCHANGE;
+    }
 
     return could_draw_at_once() ? ENC_ACCEPTED : ENC_DEFERRED;
 }
@@ -402,22 +459,48 @@ static void screen_task(void *arg)
         portENTER_CRITICAL(&s_lock);
         const int detents = s_pending;
         s_pending = 0;
-        const bool stale = s_stale[ring_step(s_active, detents)];
+        if (detents != 0) {
+            s_position = wrap_position(s_position + detents);
+        }
+        const int position = s_position;
         portEXIT_CRITICAL(&s_lock);
 
         if (detents != 0) {
-            s_active = ring_step(s_active, detents);
+            const screen_id_t want = screen_for_position(position);
+
             s_linger_deadline_us = 0;    /* the knob outranks the timer */
-            ESP_LOGI(TAG, "knob moved %+d: showing the %s screen", detents,
-                     SCREENS[s_active].name);
+
+            if (want != s_active) {
+                s_active = want;
+                ESP_LOGI(TAG, "dial at %d of %d: showing the %s screen",
+                         position + 1, ENC_POSITIONS, SCREENS[s_active].name);
+            } else {
+                ESP_LOGD(TAG, "dial at %d of %d: still the %s screen",
+                         position + 1, ENC_POSITIONS, SCREENS[s_active].name);
+            }
         } else if (s_linger_deadline_us != 0 &&
                    esp_timer_get_time() >= s_linger_deadline_us) {
             s_linger_deadline_us = 0;
             s_active = SCREENS[s_on_glass].then;
+
+            /*
+             * Re-seat the dial on the screen it has been moved to. Without
+             * this the dial would still be pointing at the diagnostics screen
+             * it has just left, and the next click would read as "no change"
+             * while the glass showed something else entirely.
+             */
+            portENTER_CRITICAL(&s_lock);
+            s_position = position_for_screen(s_active);
+            portEXIT_CRITICAL(&s_lock);
+
             ESP_LOGI(TAG, "%s screen has had its %u s: back to the %s screen",
                      SCREENS[s_on_glass].name, (unsigned)SCREENS[s_on_glass].linger_s,
                      SCREENS[s_active].name);
         }
+
+        portENTER_CRITICAL(&s_lock);
+        const bool stale = s_stale[s_active];
+        portEXIT_CRITICAL(&s_lock);
 
         /*
          * A screen change is pending exactly when the knob points somewhere the
@@ -448,13 +531,19 @@ esp_err_t screen_manager_start(screen_id_t initial)
 {
     s_active = (initial < SCREEN_COUNT) ? initial : SCREEN_CLOCK;
 
+    /* Start the dial in the middle of whatever is being shown, so the first
+     * click has the same room either way as every click after it. */
+    s_position = position_for_screen(s_active);
+
     if (xTaskCreate(screen_task, "screen", TASK_STACK, NULL, TASK_PRIO, &s_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
 
     xTaskNotifyGive(s_task);    /* s_drawn is false, so this draws immediately */
 
-    ESP_LOGI(TAG, "%d screens, starting on %s; the knob settles for %d ms",
-             SCREEN_COUNT, SCREENS[s_active].name, SCREEN_SETTLE_MS);
+    ESP_LOGI(TAG, "%d screens over %d dial positions (%d each), starting on %s "
+             "at position %d; the knob settles for %d ms",
+             SCREEN_COUNT, ENC_POSITIONS, ENC_POSITIONS / SCREEN_COUNT,
+             SCREENS[s_active].name, s_position + 1, SCREEN_SETTLE_MS);
     return ESP_OK;
 }

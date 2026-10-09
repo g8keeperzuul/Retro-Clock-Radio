@@ -139,6 +139,7 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `ENC_POLL_INTERVAL_MS` | `50` | How often the encoder is read |
 | `ENC_COUNTS_PER_DETENT` | `1` | Counts the breakout reports per physical click |
 | `ENC_REVERSED` | `0` | 1 = clockwise walks the ring backwards |
+| `ENC_POSITIONS` | `20` | Detents in one revolution; divided among the screens |
 | `ENC_LED_PIN` | `6` | seesaw pin the knob's NeoPixel is wired to |
 | `ENC_LED_BRIGHTNESS` | `40` | Out of 255; full brightness is painful |
 | `ENC_FLASH_MS` | `150` | How long the knob lights up per turn |
@@ -236,11 +237,30 @@ whichever task runs it.
 
 ### Choosing a screen
 [src/screen_manager.c](src/screen_manager.c) is the only thing that writes to the
-panel. The screens are a **ring** — clock, weather dial, two-day forecast, status — and
-turning the encoder walks it: clockwise forward, anticlockwise back, both
-wrapping. The order in `SCREENS[]` is the order the knob walks, and adding a
-screen means a line in that table and a draw function, nothing else. The
-bring-up test pattern is deliberately not in the ring.
+panel. The screens — clock, weather dial, two-day forecast, status — are laid
+out around **one revolution of the knob**. The encoder has twenty detents, so
+each of the four screens occupies five of them:
+
+```
+position   1  2  3  4  5 | 6  7  8  9 10 |11 12 13 14 15 |16 17 18 19 20
+screen     \___ clock __/ \__ weather __/ \__ forecast _/ \___ status _/
+```
+
+Turning *within* a screen's five changes nothing — the dial has somewhere to be,
+rather than every click moving the panel. The order in `SCREENS[]` is the order
+round the dial, and adding a screen means a line in that table and a draw
+function, nothing else: the division is `position * SCREEN_COUNT /
+ENC_POSITIONS`, so a fifth screen re-divides the dial into fours on its own.
+Counts that do not divide twenty spread the remainder rather than leaving a gap
+— three screens take 7, 7 and 6. The bring-up test pattern is deliberately not
+on the dial.
+
+The position is software's notion, not the encoder's: a quadrature encoder has
+no absolute reference and seesaw reports a running count, so this is that count
+folded into a revolution. Which is also what lets it be **re-seated** when the
+screen changes without the knob — the diagnostics screen showing itself out
+moves the dial to the middle of the clock's span, so the next click behaves
+rather than reading as "no change" while the glass shows something else.
 
 Nothing else needs to be a screen manager, and that is the point: a refresh
 blocks for 25 seconds and the datasheet asks for 180 between them, so *when
@@ -278,7 +298,13 @@ the knob is actually asking:
 |---|---|
 | 🟢 **green** | Accepted, and drawing as soon as you let go of the knob |
 | 🟡 **amber** | Accepted, but the panel's 180-second floor has not elapsed — the [countdown strip](#the-countdown-strip) shows how much longer |
+| ⚪ **white** | Counted, but the dial is still within the screen it was already on — keep turning |
 | 🔴 **red** | Discarded: the panel is mid-refresh |
+
+White is off to one side of the traffic-light scheme on purpose, because it is
+neither a go nor a stop. It matters more than it looks: with five detents to a
+screen, **most clicks land on it**, and a green flash followed by a panel that
+never changes would read as a fault.
 
 The verdict is decided by `screen_manager_step()` at the instant of the turn and
 handed back to the encoder driver, which owns the pixel because it is on the same

@@ -31,6 +31,7 @@ extern "C" {
 typedef enum {
     ENC_ACCEPTED,   /* it will be acted on now */
     ENC_DEFERRED,   /* accepted, but the panel is not allowed to redraw yet */
+    ENC_NOCHANGE,   /* registered, but the dial has not left the screen it is on */
     ENC_IGNORED,    /* dropped: the panel is mid-refresh */
 } enc_verdict_t;
 

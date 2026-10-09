@@ -137,13 +137,16 @@ static esp_err_t seesaw_read(uint8_t base, uint8_t reg, uint8_t *out, size_t n)
  * What each verdict looks like on the knob, at ENC_LED_BRIGHTNESS. Red for a
  * turn thrown away, amber for one that will not be drawn for up to three
  * minutes, green for one about to happen -- traffic lights, because that is
- * what the hand on the knob is actually asking.
+ * what the hand on the knob is actually asking. White is off to one side of
+ * that scheme on purpose: it means the click counted but the dial is still
+ * within the screen it was already on, which is neither a go nor a stop.
  */
 static const struct {
     uint8_t r, g, b;
 } FLASH[] = {
     [ENC_ACCEPTED] = {0, 1, 0},
     [ENC_DEFERRED] = {1, 1, 0},
+    [ENC_NOCHANGE] = {1, 1, 1},
     [ENC_IGNORED]  = {1, 0, 0},
 };
 
