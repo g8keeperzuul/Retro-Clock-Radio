@@ -2,14 +2,16 @@
  * epd_clockface.c - Analog clock face for the e-paper panel. See the header.
  *
  * Modelled on the dial in docs/pictures/clock-face.png: Art Deco numerals
- * (epd_font.h) standing outside a two-line chapter ring, an inner minute track with wedges
- * on the fives, cross lines running out to the edges of the plate, and SLEEP
- * marked under the ring.
+ * (epd_font.h) standing outside a two-line chapter ring, an inner minute track
+ * with wedges on the fives, a vertical cross line above and below the ring, and
+ * SLEEP marked under it.
  *
- * That dial carries only eight numerals. Its 12 and 6 sit behind the winder
- * knobs and its 3 and 9 were never printed -- the cross line and its dot stand
- * in for them. Nothing hides 12 and 6 here, so both are drawn; 3 and 9 keep the
- * original's line-and-dot treatment.
+ * That dial carries only eight numerals: its 12 and 6 sit behind the winder
+ * knobs, and its 3 and 9 were never printed -- horizontal cross lines running
+ * out to the edges of the plate stand in for them. Nothing hides anything here,
+ * so all twelve are drawn, and the horizontal arms are left off: with a 3 and a
+ * 9 on the plate they have nothing to stand in for and would strike through
+ * both.
  */
 #include "epd_clockface.h"
 
@@ -147,18 +149,20 @@ static void draw_minute_track(uint8_t *fb)
 }
 
 /*
- * The cross lines. Left and right run clear out to the edge of the plate, which
- * is what stands in for the missing 3 and 9. The vertical pair cannot: a
- * numeral now sits at each end of it, so those two stop short -- above SLEEP at
+ * The vertical cross line, above and below the ring.
+ *
+ * The original dial has a horizontal pair as well, running out to the edges of
+ * the plate: on that face they stand in for a 3 and a 9 that were never
+ * printed. Both numerals are drawn here, so the arms have nothing left to say
+ * and would only strike through them.
+ *
+ * The vertical line cannot run to the edges either, for the same reason -- a
+ * numeral sits at each end of it -- so it stops short at both: above SLEEP at
  * the bottom, under the 12 at the top.
  */
 static void draw_cross_lines(uint8_t *fb)
 {
-    const int edge = 6;
     const int t = 2;
-
-    paint_fill_rect(fb, edge, CY - t / 2, CX - R_QUARTER - edge, t, EPD_BLACK);
-    paint_fill_rect(fb, CX + R_QUARTER, CY - t / 2, VIEW_W - edge - (CX + R_QUARTER), t, EPD_BLACK);
 
     const int top_from = CY - R_NUMERAL + NUM_HALF_H + 8;
     paint_fill_rect(fb, CX - t / 2, top_from, t, (CY - R_QUARTER) - top_from, EPD_BLACK);
@@ -179,13 +183,6 @@ static void draw_numeral(uint8_t *fb, int cx, int cy, const char *text)
 static void draw_numerals(uint8_t *fb)
 {
     for (int hour = 1; hour <= 12; hour++) {
-        /* 3 and 9 are the cross line's business, as they are on the original. */
-        /*
-        if (hour == 3 || hour == 9) {
-            continue;
-        }
-        */
-
         int x, y;
         polar(hour * 5.0f, R_NUMERAL, &x, &y);
 
