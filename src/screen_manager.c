@@ -70,8 +70,9 @@ static const struct {
     esp_err_t (*draw)(void);
     uint8_t r, g, b;
 } SCREENS[SCREEN_COUNT] = {
-    [SCREEN_CLOCK]   = {"clock",   clock_display_draw,   1, 1, 0},   /* yellow */
-    [SCREEN_WEATHER] = {"weather", weather_display_draw, 0, 0, 1},   /* blue   */
+    [SCREEN_CLOCK]    = {"clock",    clock_display_draw,            1, 1, 0},  /* yellow */
+    [SCREEN_WEATHER]  = {"weather",  weather_display_draw,          0, 0, 1},  /* blue   */
+    [SCREEN_FORECAST] = {"forecast", weather_display_draw_forecast, 0, 1, 1},  /* cyan   */
 };
 
 static TaskHandle_t s_task;

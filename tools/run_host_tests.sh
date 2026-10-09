@@ -18,7 +18,7 @@ gcc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -g -O1 \
     -o "$OUT/test_weather" \
     test/host/test_weather.c \
     src/weather_parse.c src/weather_parse25.c src/weather_aggregate.c \
-    src/weather_types.c src/weather_moon.c \
+    src/weather_types.c src/weather_moon.c src/weather_daily.c \
     "$CJSON/cJSON.c" -lm
 
 TZ=EST5EDT "$OUT/test_weather"

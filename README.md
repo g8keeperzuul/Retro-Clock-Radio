@@ -188,6 +188,8 @@ the ring of screens.
 - [src/epd_clockface.c](src/epd_clockface.c) — the analog clock face
 - [src/epd_font.c](src/epd_font.c) — bitmap text; faces generated from the TTF
 - [src/epd_weather.c](src/epd_weather.c) — the daily weather screen
+- [src/epd_forecast.c](src/epd_forecast.c) — the two-day forecast screen
+- [src/weather_daily.c](src/weather_daily.c) — three-hourly samples reduced to a day apiece
 - [src/weather_aggregate.c](src/weather_aggregate.c) — hourly forecast into four parts of a day
 - [src/weather_api.c](src/weather_api.c) — the HTTPS fetch
 - [src/weather_parse25.c](src/weather_parse25.c) — the free 2.5 forecast
@@ -231,10 +233,10 @@ whichever task runs it.
 
 ### Choosing a screen
 [src/screen_manager.c](src/screen_manager.c) is the only thing that writes to the
-panel. The screens are a **ring** — clock, then weather — and turning the encoder
-walks it: clockwise forward, anticlockwise back, both wrapping. With two screens
-that is a toggle, but the order in `SCREENS[]` is what a third screen slots into,
-so adding one means a line in that table and a draw function, nothing else. The
+panel. The screens are a **ring** — clock, weather dial, two-day forecast — and
+turning the encoder walks it: clockwise forward, anticlockwise back, both
+wrapping. The order in `SCREENS[]` is the order the knob walks, and adding a
+screen means a line in that table and a draw function, nothing else. The
 bring-up test pattern is deliberately not in the ring.
 
 Nothing else needs to be a screen manager, and that is the point: a refresh
@@ -291,8 +293,8 @@ Amber says you are waiting. Six WS2812s say **how much longer**. When a screen
 change is accepted but held off by the 180-second floor, the strip fills and then
 empties as the wait runs down, all six going dark as the refresh begins.
 
-The colour is the screen that is *coming*, not the one showing — 🔵 blue for the
-weather, 🟡 yellow for the clock. Those live in `SCREENS[]` in
+The colour is the screen that is *coming*, not the one showing — 🟡 yellow for
+the clock, 🔵 blue for the weather dial, and cyan for the two-day forecast. Those live in `SCREENS[]` in
 [screen_manager.c](src/screen_manager.c) beside the name and draw function, on the
 same principle that put the knob's verdict colours inside the encoder driver:
 whoever owns the vocabulary owns the mapping. The gauge knows only red, green and
@@ -546,6 +548,115 @@ today and nothing else. Aggregating another day against them collapses the
 windows — the boundary clamp keeps that safe rather than nonsensical, but the
 result is meaningless.
 
+## Two-day forecast
+A second weather screen, stacked rather than radial: today on top, tomorrow
+below, in two equal 478 × 230 halves. Each carries the date, the day's condition
+and its name across the top, then five columns — temperature, humidity,
+precipitation, wind, cloud — each an icon over its reading.
+
+![two-day forecast](./docs/pictures/forecast.png)
+
+### Not the daily endpoint
+The obvious source is OpenWeather's **16-day daily forecast**
+(`/data/2.5/forecast/daily`), which hands over exactly these figures already
+reduced. It is a paid endpoint, and answers 401 on a free key — the same wall
+One Call 3.0 runs into, and worth knowing about before building against it:
+
+```
+/data/2.5/forecast        200    <- what this firmware uses
+/data/2.5/weather         200
+/data/2.5/forecast/daily  401    {"cod":401, "message": "Invalid API key..."}
+/data/3.0/onecall         401    "requires a separate subscription to the One Call by Call plan"
+```
+
+Note that the daily endpoint says **"Invalid API key"** rather than naming a
+plan, which makes an unsubscribed endpoint look like a bad key. The way to tell
+them apart is to try a free endpoint with the same key in the same breath.
+
+Every field the screen shows is in the free three-hourly response anyway —
+`temp_min`, `temp_max`, `humidity`, `pop`, `wind.gust`, `clouds.all`,
+`rain.3h`/`snow.3h`, `weather.id` — just eight times a day instead of once.
+[src/weather_daily.c](src/weather_daily.c) reduces them:
+
+| Shown | Reduced by | Why that and not the mean |
+|---|---|---|
+| High / low | max of `temp_max`, min of `temp_min` | They are the day's extremes by definition |
+| Humidity | mean | A representative figure is what is wanted |
+| Precipitation % | **the worst hour** | One hour at 90% is a day you take a coat |
+| Amount | **sum** | The day's total is what falls on you |
+| Wind | **the strongest gust** | A gust is already a peak; averaging peaks means nothing |
+| Cloud | mean | As humidity |
+| Condition | **the most severe**, then the commonest wording at that severity | An afternoon of thunderstorms is what the day was, however calm the rest; but one "heavy intensity rain" hour should not retitle a day of "moderate rain" |
+
+The whole screen comes out of the poll the dial screen already makes, so the
+second screen costs **no additional API calls** — `weather_display.c` reduces one
+response two ways and tells the screen manager separately about each, since a
+change to one is no reason to redraw the other.
+
+### What "today" means as the day runs out
+The three-hourly forecast begins at the current hour and carries no history, so
+the top half narrows as the day goes by. At nine in the evening there is one
+sample left and the half honestly describes the hours that remain; by then the
+high and the low have converged on much the same number. Tomorrow is always a
+full eight samples. This is the endpoint's limitation rather than a choice, but
+the behaviour is deliberate: the alternative of persisting each morning's
+aggregate still shows nothing useful after an evening cold boot.
+
+### Why this screen came out grey, and what it actually was
+Worth recording because the obvious explanation was wrong and cost a detour.
+
+The screen rendered washed out — grey rather than black, and only this screen.
+The first theory was stroke width: this screen is small type end to end, and a
+measurement supported it, showing 57% of its horizontal runs at two pixels or
+under against the clock face's 34%. A heavier cut of the small face duly went in.
+
+It was not the cause. The real symptom, once looked at properly, was that the
+image is **correct and high-contrast when the refresh finishes** and washes out
+a moment later. That is not something artwork can do.
+
+`epd_forecast_show()` was missing the `epd_sleep()` that the other three screens
+all call. `epd_display()` returns with the panel still driving; the `POWER_OFF`
+inside `epd_sleep()` is what stops it. Left energised after the waveform has
+finished, the panel goes on pushing pigment and dissolves the image it has just
+built. Fine detail goes first, which is why a screen of small type showed it and
+the clock face would not have — the stroke-width measurement was real, but it
+was measuring susceptibility, not cause.
+
+The one-line fix is in `epd_forecast_show()`. The structural problem is that the
+rule "always `epd_sleep()` after `epd_display()`" lives in three copies and
+nothing enforces it; it is now at least written down on `epd_display()` in
+[src/epd_5in83g.h](src/epd_5in83g.h). Folding the `POWER_OFF` into
+`epd_display()` — which is where Waveshare's own reference puts it, inside its
+`TurnOnDisplay` — would make it unforgettable, and is the right next change.
+
+The heavier face was kept. It is not what fixed the problem, but a panel whose
+optics are coarser than its addressing does render small type better with it,
+and the screen is easier to read across a room. It is one line to undo: the
+`#define FACE` at the top of [src/epd_forecast.c](src/epd_forecast.c).
+
+| Screen | ink | runs ≤ 2 px | median stroke |
+|---|---|---|---|
+| clock face | 5.2% | 34% | 3 px |
+| forecast, light cut | 9.0% | 57% | 2 px |
+| forecast, heavy cut | 10.7% | 18% | 3 px |
+
+### Wording and units
+The condition name is OpenWeather's own — "BROKEN CLOUDS", "MODERATE RAIN" —
+from a table in `weather_daily.c` keyed by condition id rather than from the
+response's `description` string. A day is eight samples but one description, so
+carrying the string would mean carrying it on every sample to be sure of having
+the right one; the ids are a fixed published list, so the table cannot drift.
+Fifty of OpenWeather's fifty-five phrasings fit beside the date and the icon.
+For the other five — "THUNDERSTORM WITH HEAVY DRIZZLE" is the worst — **the icon
+gives way, not the words.** The glyph says nothing the words do not, so dropping
+it costs nothing, whereas shortening the words to make room would lose the
+difference between drizzle and hail. Only a condition id outside the published
+table falls all the way back to the project's own coarser vocabulary.
+
+Gust arrives in metres per second and is shown in **km/h**, which is what reads
+naturally beside °C. The degree sign is drawn as a ring rather than set: the
+faces were cut from ASCII and have no `°` in them.
+
 ### Call budget
 The free One Call tier allows 1000 calls a day. The cap is not the real risk — a
 crash loop is, since each restart would otherwise make a call. So
@@ -576,9 +687,21 @@ way.
 The pure modules build on a host with plain gcc:
 
 ```sh
-sh tools/run_host_tests.sh          # parser and aggregator, ~40 assertions
+sh tools/run_host_tests.sh          # parser and aggregators
 python3 tools/make_weather_fixtures.py
 ```
+
+A screen can also be drawn without a panel, which is how the layouts were
+settled rather than by spending a 25-second refresh on each attempt:
+
+```sh
+sh tools/hostrender/render.sh response.json out.png [now_epoch]
+```
+
+It compiles the real drawing code against three stub headers in
+`tools/hostrender/stub/` — nothing else differs between there and the device.
+Passing an epoch poses "what does this look like at nine in the evening", which
+is how the narrowing of *today* above was checked.
 
 Fixtures cover a baseline day, the low-confidence-drizzle trap, a device booted
 after dark, a polar day with no sunrise, and a 401 body. The awkward cases need

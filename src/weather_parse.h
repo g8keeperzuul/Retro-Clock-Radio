@@ -24,12 +24,23 @@ extern "C" {
 #define WX_MAX_HOURLY 56
 #define WX_MAX_DAILY   8
 
+/*
+ * One sample. The first five fields are what the dial screen reduces to four
+ * parts of a day; the rest are what the two-day forecast screen shows as
+ * columns, and are carried here rather than fetched separately so that both
+ * screens come out of the same response and the same call.
+ */
 typedef struct {
     time_t   dt;
     int16_t  temp_x10;
     uint8_t  pop_pct;
     uint8_t  clouds_pct;
     uint16_t cond_id;
+
+    int16_t  temp_min_x10, temp_max_x10;
+    uint8_t  humidity_pct;
+    uint16_t gust_x10;       /* metres per second, as the API sends it */
+    uint16_t precip_x100;    /* millimetres over this sample's own span */
 } wx_hour_t;
 
 typedef struct {

@@ -108,6 +108,38 @@ wx_status_t weather_parse25(const char *body, size_t len, wx_forecast_t *out)
         h->cond_id =
             (uint16_t)number_or(cJSON_GetObjectItemCaseSensitive(first, "id"), 0);
 
+        /* ---- what the two-day forecast screen needs -------------------- */
+
+        h->temp_min_x10 = tenths(cJSON_GetObjectItemCaseSensitive(main, "temp_min"));
+        h->temp_max_x10 = tenths(cJSON_GetObjectItemCaseSensitive(main, "temp_max"));
+        h->humidity_pct =
+            clamp_pct(number_or(cJSON_GetObjectItemCaseSensitive(main, "humidity"), 0.0));
+
+        /*
+         * gust is only present when there is one, so speed is the floor: a
+         * calm day should read as its wind, not as zero.
+         */
+        const cJSON *wind = cJSON_GetObjectItemCaseSensitive(entry, "wind");
+        double gust = number_or(cJSON_GetObjectItemCaseSensitive(wind, "gust"), 0.0);
+        const double speed = number_or(cJSON_GetObjectItemCaseSensitive(wind, "speed"), 0.0);
+        if (speed > gust) {
+            gust = speed;
+        }
+        h->gust_x10 = (gust > 0.0) ? (uint16_t)(gust * 10.0 + 0.5) : 0;
+
+        /*
+         * Rain and snow are each an object with one member, "3h", and the
+         * member is absent entirely on a dry sample. Both are counted: a day
+         * that turns over gets the sum, which is what the amount means.
+         */
+        const cJSON *rain = cJSON_GetObjectItemCaseSensitive(entry, "rain");
+        const cJSON *snow = cJSON_GetObjectItemCaseSensitive(entry, "snow");
+        const double precip =
+            number_or(cJSON_GetObjectItemCaseSensitive(rain, "3h"), 0.0) +
+            number_or(cJSON_GetObjectItemCaseSensitive(snow, "3h"), 0.0);
+
+        h->precip_x100 = (precip > 0.0) ? (uint16_t)(precip * 100.0 + 0.5) : 0;
+
         out->n_hours++;
     }
 

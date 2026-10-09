@@ -49,6 +49,14 @@ extern const font_face_t FONT_DIAL;    /* digits only, sized for the clock */
 extern const font_face_t FONT_TITLE;   /* mixed case, for the weather heading */
 extern const font_face_t FONT_LABEL;   /* caps and digits, for everything small */
 
+/*
+ * FONT_LABEL with one more pixel of weight. Not a style choice: a four-ink
+ * e-paper cannot resolve a one-pixel stem and renders it grey, so a screen set
+ * entirely in small type reads washed out unless the type is cut heavier. See
+ * README.md "Why the small face has a heavy cut".
+ */
+extern const font_face_t FONT_LABEL_HEAVY;
+
 /* Width the string occupies, in pixels. */
 int font_text_width(const font_face_t *face, const char *text);
 

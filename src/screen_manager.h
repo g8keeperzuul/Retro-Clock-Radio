@@ -34,6 +34,7 @@ extern "C" {
 typedef enum {
     SCREEN_CLOCK,
     SCREEN_WEATHER,
+    SCREEN_FORECAST,
     SCREEN_COUNT,
 } screen_id_t;
 

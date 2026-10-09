@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "cJSON.h"
+#include "epd_forecast.h"
 #include "epd_weather.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -17,6 +18,7 @@
 #include "time_sync.h"
 #include "weather_aggregate.h"
 #include "weather_api.h"
+#include "weather_daily.h"
 #include "weather_parse25.h"
 #include "weather_quota.h"
 
@@ -47,6 +49,14 @@ static const char *TAG = "wx-display";
  * copy the struct, never across a fetch or a refresh.
  */
 static wx_report_t s_report;
+
+/*
+ * The same response, reduced a second way. The dial screen wants four parts of
+ * today; the two-day screen wants a row of figures for today and tomorrow.
+ * Both come out of one fetch, so adding the second screen cost no API calls.
+ */
+static wx_daysum_t s_days[2];      /* [0] today, [1] tomorrow */
+
 static SemaphoreHandle_t s_report_lock;
 
 /*
@@ -74,8 +84,8 @@ static void install_json_hooks(void)
     cJSON_InitHooks(&hooks);
 }
 
-/* Fetch, parse and reduce. The forecast is a kilobyte, so it lives on the heap. */
-static bool poll_forecast(wx_report_t *out)
+/* Fetch, parse and reduce -- twice, once for each screen's shape. */
+static bool poll_forecast(wx_report_t *out, wx_daysum_t days[2])
 {
     const esp_err_t reserved = weather_quota_reserve();
     if (reserved != ESP_OK) {
@@ -126,6 +136,21 @@ static bool poll_forecast(wx_report_t *out)
     }
 
     out->fetched_at = time(NULL);
+
+    /*
+     * And the same samples again, by calendar day. Today's window has already
+     * been worked out above; tomorrow's comes from asking for the bounds of an
+     * hour past midnight, which keeps the one mktime-with-tm_isdst path and so
+     * stays right across a clock change.
+     */
+    memset(days, 0, 2 * sizeof(days[0]));
+    weather_day_summary(fc, cfg.day_start, cfg.day_end, &days[0]);
+
+    time_t t_start, t_noon, t_end;
+    if (weather_day_bounds(cfg.day_end + 3600, &t_start, &t_noon, &t_end) == WX_OK) {
+        weather_day_summary(fc, t_start, t_end, &days[1]);
+    }
+
     ok = true;
 
 done:
@@ -156,6 +181,23 @@ esp_err_t weather_display_draw(void)
     return epd_weather_show(&snapshot);
 }
 
+esp_err_t weather_display_draw_forecast(void)
+{
+    wx_daysum_t snapshot[2];
+
+    if (s_report_lock == NULL) {
+        memset(snapshot, 0, sizeof(snapshot));
+        return epd_forecast_show(&snapshot[0], &snapshot[1]);
+    }
+
+    xSemaphoreTake(s_report_lock, portMAX_DELAY);
+    snapshot[0] = s_days[0];
+    snapshot[1] = s_days[1];
+    xSemaphoreGive(s_report_lock);
+
+    return epd_forecast_show(&snapshot[0], &snapshot[1]);
+}
+
 static void weather_display_task(void *arg)
 {
     (void)arg;
@@ -164,25 +206,35 @@ static void weather_display_task(void *arg)
         wx_report_t fresh;
         memset(&fresh, 0, sizeof(fresh));
 
-        const bool got = poll_forecast(&fresh);
+        wx_daysum_t days[2];
+        const bool got = poll_forecast(&fresh, days);
 
         if (got) {
             /*
              * Announce only when the glass would actually differ. At a
              * half-hourly poll most fetches return the same forecast, and the
              * panel is rated for a limited number of refreshes -- see
-             * refresh_count.c. The report is stored either way, so its
-             * timestamps stay current.
+             * refresh_count.c. Both screens are stored either way, so their
+             * timestamps stay current; they are compared separately because a
+             * change to one is no reason to redraw the other.
              */
-            const bool changed = !wx_report_equal(&fresh, &s_report);
+            const bool dial_changed = !wx_report_equal(&fresh, &s_report);
+            const bool days_changed = !wx_daysum_equal(&days[0], &s_days[0]) ||
+                                      !wx_daysum_equal(&days[1], &s_days[1]);
 
             xSemaphoreTake(s_report_lock, portMAX_DELAY);
             s_report = fresh;
+            s_days[0] = days[0];
+            s_days[1] = days[1];
             xSemaphoreGive(s_report_lock);
 
-            if (changed) {
+            if (dial_changed) {
                 screen_manager_content_changed(SCREEN_WEATHER);
-            } else {
+            }
+            if (days_changed) {
+                screen_manager_content_changed(SCREEN_FORECAST);
+            }
+            if (!dial_changed && !days_changed) {
                 ESP_LOGI(TAG, "forecast unchanged; leaving the panel alone");
             }
         }

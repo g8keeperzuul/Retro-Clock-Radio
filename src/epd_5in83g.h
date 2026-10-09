@@ -78,6 +78,14 @@ esp_err_t epd_clear(epd_color_t color);
 /*
  * Push a full EPD_FB_SIZE frame buffer and refresh. The buffer may live in
  * PSRAM; it is copied through an internal DMA-capable bounce buffer.
+ *
+ * Returns with the panel still DRIVING. Every caller must follow with
+ * epd_sleep(), whose POWER_OFF is what stops it -- this is not housekeeping
+ * that can be skipped. A panel left energised after the waveform has finished
+ * goes on pushing pigment, and the image it has just built washes out over the
+ * next few seconds: correct and high-contrast at the end of the refresh, grey
+ * shortly after. Fine detail goes first, so a screen of small type shows it
+ * long before a screen of large type does.
  */
 esp_err_t epd_display(const uint8_t *fb);
 

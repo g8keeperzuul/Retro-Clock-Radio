@@ -224,7 +224,7 @@ build_flags =
     ; Out of 255, matching the knob so the two read as one instrument. Six
     ; pixels at this level draw well under 50 mA; approaching 255 on all three
     ; channels would want the 5 V rail and a level shifter.
-    -D GAUGE_BRIGHTNESS=40
+    -D GAUGE_BRIGHTNESS=8
 
     ; How often the remaining time is re-read. Only a change in the number of
     ; pixels lit costs a transmission, so a three-minute countdown is six

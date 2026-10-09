@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "weather_aggregate.h"
+#include "weather_daily.h"
 #include "weather_moon.h"
 #include "weather_parse.h"
 #include "weather_parse25.h"
@@ -230,6 +231,90 @@ int main(void)
                    live.part[w].src == WX_SRC_HOURLY ? "" : "*");
         }
         printf("\n");
+    }
+
+    /* ---- weather_daily: the two-day screen's arithmetic ------------------ */
+    {
+        /*
+         * A hand-built day: four three-hourly samples, chosen so every
+         * reduction can be checked by hand rather than against itself.
+         *
+         *   temp_min  2.0  1.0  3.0  4.0  -> lowest  1.0
+         *   temp_max  8.0  9.0 12.0  7.0  -> highest 12.0
+         *   humidity   60   70   80   90  -> mean 75
+         *   pop        10   90   20   30  -> worst 90, not the mean
+         *   gust      5.0  9.0  3.0  1.0  -> strongest 9.0
+         *   clouds     20   40   60   80  -> mean 50
+         *   precip    0.5  1.25 0.0  0.25 -> total 2.0
+         */
+        static const struct { int16_t lo, hi; uint8_t rh, pop, cl; uint16_t g, p; } S[] = {
+            {20, 80, 60, 10, 20, 50, 50}, {10, 90, 70, 90, 40, 90, 125},
+            {30, 120, 80, 20, 60, 30, 0}, {40, 70, 90, 30, 80, 10, 25},
+        };
+
+        wx_forecast_t fc;
+        memset(&fc, 0, sizeof(fc));
+        const time_t day = 1700000000;   /* arbitrary; only the span matters */
+
+        for (int i = 0; i < 4; i++) {
+            wx_hour_t *h = &fc.hour[i];
+            h->dt = day + i * 3 * 3600;
+            h->temp_min_x10 = S[i].lo;
+            h->temp_max_x10 = S[i].hi;
+            h->humidity_pct = S[i].rh;
+            h->pop_pct = S[i].pop;
+            h->clouds_pct = S[i].cl;
+            h->gust_x10 = S[i].g;
+            h->precip_x100 = S[i].p;
+            h->cond_id = 500;            /* light rain throughout */
+        }
+        fc.n_hours = 4;
+
+        wx_daysum_t d;
+        ok("a day reduces", weather_day_summary(&fc, day, day + 86400, &d) == WX_OK);
+        ok("every sample counted", d.samples == 4);
+        ok("low is the lowest min", d.temp_min_x10 == 10);
+        ok("high is the highest max", d.temp_max_x10 == 120);
+        ok("humidity is the mean", d.humidity_pct == 75);
+        ok("cloud is the mean", d.clouds_pct == 50);
+        ok("pop is the worst hour, not the mean", d.pop_pct == 90);
+        ok("gust is the strongest", d.gust_x10 == 90);
+        ok("precipitation is the total", d.precip_x100 == 200);
+
+        /* A window outside the samples is empty, which is what a late evening
+         * looks like -- ordinary, and it must not be mistaken for an error. */
+        wx_daysum_t gap;
+        ok("an empty window says so",
+           weather_day_summary(&fc, day + 86400, day + 2 * 86400, &gap) == WX_ERR_NO_DATA);
+        ok("and leaves nothing to draw", !gap.valid);
+
+        /*
+         * Severity, not frequency, picks the glyph: three calm hours must not
+         * bury one thunderstorm. But within the worst rank, the commonest
+         * wording wins, so a lone "heavy" hour does not retitle the day.
+         */
+        fc.hour[1].cond_id = 201;    /* thunderstorm with rain */
+        fc.hour[2].cond_id = 202;    /* ... and one heavier hour */
+        fc.hour[3].cond_id = 201;
+        wx_daysum_t storm;
+        weather_day_summary(&fc, day, day + 86400, &storm);
+        ok("the worst condition of the day wins", storm.cond_id == 201);
+
+        ok("descriptions come back in capitals",
+           strcmp(wx_cond_description(803), "BROKEN CLOUDS") == 0);
+        ok("and cover the whole published table",
+           strcmp(wx_cond_description(781), "TORNADO") == 0 &&
+           strcmp(wx_cond_description(500), "LIGHT RAIN") == 0);
+        ok("an unlisted id still says something",
+           wx_cond_description(999) != NULL && wx_cond_description(999)[0] != '\0');
+
+        /* The comparison is what decides whether a refresh is spent. */
+        wx_daysum_t a = d, b = d;
+        ok("identical days compare equal", wx_daysum_equal(&a, &b));
+        b.samples = 1;
+        ok("a changed sample count alone is not a redraw", wx_daysum_equal(&a, &b));
+        b.pop_pct = 1;
+        ok("a changed reading is", !wx_daysum_equal(&a, &b));
     }
 
     printf(failures ? "\n%d FAILED\n" : "\nall passed\n", failures);

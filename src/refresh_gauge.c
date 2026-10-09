@@ -125,8 +125,13 @@ void refresh_gauge_show(uint8_t r, uint8_t g, uint8_t b, int lit)
         lit = GAUGE_LED_COUNT;
     }
 
+    /*
+     * Lit from the far end back towards the data-in end, so the strip empties
+     * towards pixel zero: the one nearest the controller is the last to go
+     * out. Flip the comparison to `i < lit` to run it the other way.
+     */
     for (int i = 0; i < GAUGE_LED_COUNT; i++) {
-        const bool on = (i < lit);
+        const bool on = (i >= GAUGE_LED_COUNT - lit);
 
         /* WS2812s take green first. */
         s_pixels[i * BYTES_PER_LED + 0] = on ? g : 0;

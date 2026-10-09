@@ -35,11 +35,21 @@ UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 LOWER = "abcdefghijklmnopqrstuvwxyz"
 PUNCT = " ,.:%-/'"
 
+# `weight` emboldens: the glyph is smeared right and down by that many pixels,
+# and the advance grows to match so the metrics stay honest.
+#
+# This exists because of the panel, not because of typography. A four-ink
+# e-paper resolves a one-pixel line as grey rather than black -- there is more
+# ink in a microcapsule than in a pixel -- so a face whose stems come out at one
+# or two pixels reads washed out however black the frame buffer says it is. The
+# clock and the dial set type big enough not to care; the two-day forecast is
+# all small type, and needs the heavier cut.
 FACES = [
-    # name,        pointsize, charset,                        tracking
-    ("FONT_DIAL",   60, DIGITS,                                2),
-    ("FONT_TITLE",  40, UPPER + LOWER + DIGITS + PUNCT,        2),
-    ("FONT_LABEL",  26, UPPER + DIGITS + PUNCT,                1),
+    # name,              pointsize, charset,                   tracking, weight
+    ("FONT_DIAL",         60, DIGITS,                           2, 0),
+    ("FONT_TITLE",        40, UPPER + LOWER + DIGITS + PUNCT,   2, 0),
+    ("FONT_LABEL",        26, UPPER + DIGITS + PUNCT,           1, 0),
+    ("FONT_LABEL_HEAVY",  26, UPPER + DIGITS + PUNCT,           1, 1),
 ]
 
 
@@ -121,8 +131,30 @@ def render(ch, pt):
     return gw, gh, x0 - pen_x, y0 - pen_y, rows
 
 
-def build_face(name, pt, charset, tracking):
-    sys.stderr.write(f"{name}: pt{pt}, {len(charset)} glyphs\n")
+def embolden(rows, gw, gh, weight):
+    """Smear the glyph right and down, so a 1 px stem becomes weight+1 px."""
+    if weight <= 0:
+        return rows, gw, gh
+
+    out_w, out_h = gw + weight, gh + weight
+    stride = (out_w + 7) // 8
+    grown = [bytearray(stride) for _ in range(out_h)]
+
+    for y in range(gh):
+        for x in range(gw):
+            if not (rows[y][x >> 3] & (0x80 >> (x & 7))):
+                continue
+            for dy in range(weight + 1):
+                for dx in range(weight + 1):
+                    cx, cy = x + dx, y + dy
+                    grown[cy][cx >> 3] |= 0x80 >> (cx & 7)
+
+    return [bytes(r) for r in grown], out_w, out_h
+
+
+def build_face(name, pt, charset, tracking, weight=0):
+    sys.stderr.write(f"{name}: pt{pt}, {len(charset)} glyphs"
+                     f"{f', +{weight} weight' if weight else ''}\n")
     glyphs, blob = [], bytearray()
     ascent = descent = 0
 
@@ -138,12 +170,13 @@ def build_face(name, pt, charset, tracking):
             continue
 
         gw, gh, bx, by, rows = r
+        rows, gw, gh = embolden(rows, gw, gh, weight)
         ascent = max(ascent, -by)
         descent = max(descent, by + gh)
 
         glyphs.append({
             "ch": ch, "w": gw, "h": gh, "bx": bx, "by": by,
-            "advance": advance_of(ch, pt) + tracking,
+            "advance": advance_of(ch, pt) + tracking + weight,
             "offset": len(blob),
         })
         for row in rows:
@@ -151,7 +184,7 @@ def build_face(name, pt, charset, tracking):
 
     return {
         "name": name,
-        "space": advance_of(" ", pt) + tracking,
+        "space": advance_of(" ", pt) + tracking + weight,
         "ascent": ascent,
         "descent": descent,
         "glyphs": glyphs,

@@ -61,9 +61,19 @@ def solid(shape):
     return shape
 
 
-def outline(shape):
+def outline(shape, stroke=None):
     """The rule that makes everything here line art."""
-    return lambda x, y: shape(x, y, 0) and not shape(x, y, STROKE)
+    w = STROKE if stroke is None else stroke
+    return lambda x, y: shape(x, y, 0) and not shape(x, y, w)
+
+
+# Icons drawn at a heavier weight. The two-day forecast screen puts these on
+# white at the same size as its type, and this panel renders a two-pixel
+# outline grey -- there is more ink in a microcapsule than in a pixel. The
+# condition icons are left alone: they appear on the dial screen too, where the
+# lighter line is wanted and the coloured grounds carry the contrast.
+HEAVY = {"THERMOMETER", "HUMIDITY", "UMBRELLA", "WIND", "CLOUDCOVER"}
+HEAVY_STROKE = 3
 
 
 # --- the pieces the icons are built from ------------------------------------
@@ -197,6 +207,65 @@ def icons():
                                  (C + 7, (tip + tail) / 2)])))
         out[name] = marks
 
+    # --- the five measures on the two-day forecast screen -------------------
+    # These are labels for a column of numbers rather than pictures of weather,
+    # so they are drawn plainer than the condition icons above: one reading
+    # each, nothing to mistake for anything else at a glance.
+
+    # Outlined body with the mercury filled in, which is the only way a
+    # thermometer reads as one at this size.
+    out["THERMOMETER"] = [
+        union(disc(C, C + r(22), r(13)),
+              rect(C - r(6), C - r(32), C + r(6), C + r(22)),
+              disc(C, C - r(32), r(6))),
+        solid(disc(C, C + r(22), r(7.5))),
+        solid(rect(C - r(3), C - r(12), C + r(3), C + r(22))),
+    ]
+
+    # A filled teardrop with a crescent struck out of it, the way the mock-up
+    # suggests a highlight. Outlining it instead leaves a smudge with a hole.
+    teardrop = union(disc(C, C + r(12), r(22)),
+                     poly([(C, C - r(34)), (C + r(22), C + r(12)),
+                           (C - r(22), C + r(12))]))
+    out["HUMIDITY"] = [
+        solid(without(teardrop,
+                      without(disc(C - r(6), C + r(14), r(14)),
+                              disc(C + r(3), C + r(9), r(15))))),
+    ]
+
+    # Umbrella: a scalloped dome, a stick, and a hook made from the lower half
+    # of a ring. Rain above, or it reads as a parasol.
+    dome = without(disc(C, C + r(14), r(28)),
+                   rect(-1, C + r(14), SIZE + 1, SIZE + 1))
+    scallops = union(*[disc(C + r(k * 19), C + r(14), r(7)) for k in (-1, 0, 1)])
+    hook = disc(C - r(8), C + r(30), r(8))
+    out["UMBRELLA"] = [
+        without(dome, scallops),
+        solid(rect(C - r(2.5), C + r(14), C + r(2.5), C + r(30))),
+        solid(lambda x, y, i: hook(x, y, 0) and not hook(x, y, STROKE)
+              and y >= C + r(30)),
+        drop(C - r(24), C - r(26), r(13)), drop(C - r(8), C - r(32), r(13)),
+        drop(C + r(8), C - r(32), r(13)), drop(C + r(24), C - r(26), r(13)),
+    ]
+
+    # Wind: bars with the ends curled over. The curls are three quarters of a
+    # ring -- a full one reads as a bubble, and a bare bar reads as nothing.
+    def gust(y, x0, x1, loop):
+        bar = solid(rect(x0, y - STROKE / 2.0, x1, y + STROKE / 2.0))
+        if loop <= 0:
+            return [bar]
+        ring = disc(x1, y - loop, loop)
+        return [bar, solid(lambda x, yy, i: ring(x, yy, 0) and not ring(x, yy, STROKE)
+                           and not (x < x1 and yy > y - loop))]
+
+    out["WIND"] = (gust(C - r(16), C - r(32), C + r(12), r(8)) +
+                   gust(C + r(2), C - r(32), C + r(26), 0) +
+                   gust(C + r(20), C - r(26), C + r(6), r(10)))
+
+    # Cloud cover is a quantity, not a condition, so it is the same cloud as
+    # WX_ICON_CLOUD but filled -- solid reads as "how much", outline as "what".
+    out["CLOUDCOVER"] = [solid(cloud(C, C + r(6)))]
+
     # Eight phases, named for the octant weather_types.c reports.
     for k in range(8):
         out["MOON_%d" % k] = [disc(C, C, r(22)), moon_disc(C, C, r(22), k / 8.0)]
@@ -206,13 +275,13 @@ def icons():
 
 # --- rasterising -------------------------------------------------------------
 
-def raster(parts):
+def raster(parts, stroke=None):
     step = 1.0 / SUB
     need = SUB * SUB / 2
     grid = [bytearray(SIZE) for _ in range(SIZE)]
 
     for part in parts:
-        draw = part if getattr(part, "solid", False) else outline(part)
+        draw = part if getattr(part, "solid", False) else outline(part, stroke)
         for py in range(SIZE):
             for px in range(SIZE):
                 if grid[py][px]:
@@ -272,8 +341,9 @@ def emit(grids):
 def main():
     grids = {}
     for name, parts in icons().items():
-        sys.stderr.write("  %s\n" % name)
-        grids[name] = raster(parts)
+        heavy = name in HEAVY
+        sys.stderr.write("  %s%s\n" % (name, "  (heavy)" if heavy else ""))
+        grids[name] = raster(parts, HEAVY_STROKE if heavy else None)
 
     OUT.write_text(emit(grids))
     print("wrote %s: %d icons, %d bytes" %

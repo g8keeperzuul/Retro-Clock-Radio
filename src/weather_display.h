@@ -32,8 +32,12 @@ esp_err_t weather_display_start(void);
  * Put the latest forecast on the panel. Blocks for the length of a refresh,
  * about twenty-five seconds. Called by the screen manager, which serialises
  * the panel; nothing else should call it.
+ *
+ * Two renderings of the same fetch: _draw is the dial, _draw_forecast is the
+ * two-day table. One poll feeds both, so the second screen costs no API calls.
  */
 esp_err_t weather_display_draw(void);
+esp_err_t weather_display_draw_forecast(void);
 
 #ifdef __cplusplus
 }
