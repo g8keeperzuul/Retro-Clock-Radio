@@ -55,6 +55,12 @@ size_t wifi_sta_format_ip(char *buf, size_t len);
 size_t wifi_sta_format_mac(char *buf, size_t len);
 size_t wifi_sta_format_ssid(char *buf, size_t len);
 
+/*
+ * Signal strength of the associated AP in dBm, which is always negative, or 0
+ * when there is no association to measure.
+ */
+int wifi_sta_rssi(void);
+
 #ifdef __cplusplus
 }
 #endif

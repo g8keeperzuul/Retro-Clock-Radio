@@ -256,6 +256,39 @@ build_flags =
     ; unplugged, and survives into any photograph of the device.
     -D STATUS_MASK_API_KEY=0
 
+    ; --- MQTT diagnostics --------------------------------------------------
+    ; Publishes the status screen's fields, plus RSSI, as a JSON object every
+    ; interval. Set MQTT_ENABLED to 0 to leave the client out of the build.
+    -D MQTT_ENABLED=1
+
+    ; Broker. mqtt:// is plaintext on 1883; mqtts:// would need a certificate
+    ; bundle and a broker configured for TLS. Credentials are secrets, which is
+    ; why they live here in the git-ignored platformio.ini and not in a source
+    ; file -- the same arrangement as WIFI_PASSWORD and OWM_API_KEY.
+    -D MQTT_BROKER_URI=\"mqtt://CHANGE_ME:1883\"
+    -D MQTT_USERNAME=\"CHANGE_ME\"
+    -D MQTT_PASSWORD=\"CHANGE_ME\"
+
+    ; Where the payload goes. Note this is a state topic, not a Home Assistant
+    ; discovery topic -- HA looks for .../config under the homeassistant/
+    ; prefix, so it will not create an entity from this on its own. Point an
+    ; mqtt sensor at it, or publish a discovery message separately.
+    -D MQTT_TOPIC=\"homeassistant/sensor/retro-clock-radio/diagnostics\"
+
+    ; How often to publish, in seconds.
+    -D MQTT_PUBLISH_INTERVAL_S=300
+
+    ; Retained by default, so a subscriber that connects late still gets the
+    ; last reading rather than waiting out an interval for the next one.
+    -D MQTT_QOS=0
+    -D MQTT_RETAIN=0
+
+    ; Set to 0 to drop the OpenWeather key from the payload while leaving it on
+    ; the status screen. Worth considering: 1883 is plaintext on the wire, a
+    ; retained message sits on the broker until something replaces it, and Home
+    ; Assistant will file it in its recorder database and show it in history.
+    -D MQTT_PUBLISH_API_KEY=0
+
 ; Enable core debug output to see early boot logs
 ;    -D CORE_DEBUG_LEVEL=5
 

@@ -17,6 +17,8 @@ uint32_t refresh_count_get(void) { return 48217; }
 size_t wifi_sta_format_ip(char *b, size_t n) { return snprintf(b, n, "192.168.137.214"); }
 size_t wifi_sta_format_mac(char *b, size_t n) { return snprintf(b, n, "a0:85:e3:4b:19:7c"); }
 size_t wifi_sta_format_ssid(char *b, size_t n) { return snprintf(b, n, "%s", getenv("SSID") ?: "ETHERCI5"); }
+int wifi_sta_rssi(void) { return -57; }
+_Bool wifi_sta_is_connected(void) { return 1; }
 int64_t esp_timer_get_time(void) { return 275040LL * 1000000LL; }
 
 int main(int argc, char **argv)

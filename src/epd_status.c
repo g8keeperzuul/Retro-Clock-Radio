@@ -6,44 +6,34 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "diagnostics.h"
 #include "epd_paint.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "refresh_count.h"
-#include "wifi_sta.h"
 
 static const char *TAG = "epd-status";
 
 /* ---- Compile-time parameters (platformio.ini -> build_flags) ------------- */
 
-#ifndef TIME_ZONE
-#define TIME_ZONE "UTC0"
-#endif
-#ifndef OWM_LATITUDE
-#define OWM_LATITUDE "--"
-#endif
-#ifndef OWM_LONGITUDE
-#define OWM_LONGITUDE "--"
-#endif
-#ifndef OWM_API_KEY
-#define OWM_API_KEY "--"
-#endif
-
 /*
- * Whether to print the OpenWeather key in full.
- *
- * It is shown whole by default, because a diagnostics screen that cannot tell
- * you which key was flashed is not doing its job. Worth knowing before leaving
- * it that way: e-paper holds its last image with no power at all, so the key
- * stays legible on the glass after the radio is unplugged, and survives into
- * any photograph of the device. Set this to 1 to print the first and last four
- * characters only, which is still enough to tell two keys apart.
+ * The MQTT rows appear only when there is a client to describe. The broker URI
+ * is printed as configured -- worth remembering that a URI of the form
+ * mqtt://user:pass@host would put those credentials on the glass, and e-paper
+ * keeps its last image with no power at all.
  */
-#ifndef STATUS_MASK_API_KEY
-#define STATUS_MASK_API_KEY 0
+#ifndef MQTT_ENABLED
+#define MQTT_ENABLED 0
+#endif
+#ifndef MQTT_BROKER_URI
+#define MQTT_BROKER_URI "--"
+#endif
+#ifndef MQTT_TOPIC
+#define MQTT_TOPIC "--"
+#endif
+#ifndef MQTT_PUBLISH_INTERVAL_S
+#define MQTT_PUBLISH_INTERVAL_S 10
 #endif
 
 #define VIEW_W EPD_USABLE_WIDTH    /* 478 */
@@ -58,19 +48,30 @@ static const char *TAG = "epd-status";
 
 #define MARGIN     10
 #define LABEL_X    MARGIN
-#define VALUE_X    (MARGIN + 10 * CHAR_W)           /* widest label plus a space */
+#define VALUE_X    (MARGIN + 11 * CHAR_W)           /* widest label plus a space */
 #define VALUE_W    (VIEW_W - VALUE_X - MARGIN)
+
+/* Where an over-long value continues, and how much of it fits on a line. */
+#define WRAP_X     (LABEL_X + CHAR_W)
+#define WRAP_CHARS ((VIEW_W - WRAP_X - MARGIN) / CHAR_W)
+#define WRAP_STEP  (LINE_H + 4)
 
 #define TITLE_SCALE 4
 #define TITLE_Y     12
 #define RULE_Y      (TITLE_Y + PAINT_FONT_H * TITLE_SCALE + 10)
 #define FIRST_ROW   (RULE_Y + 18)
-#define ROW_STEP    38
 
 /*
- * One labelled row. A value too wide for its column drops to the next line and
- * runs the full width -- which is what the key does, and what a long SSID will
- * do. Returns how many lines were used, so the caller keeps its place.
+ * Eleven rows and fourteen lines in the worst case -- every MQTT field present
+ * and both the key and the topic wrapped. That is what sets this: 30 leaves
+ * about twenty pixels at the foot, and anything larger runs off the bottom.
+ */
+#define ROW_STEP    30
+
+/*
+ * One labelled row. A value too wide for its column runs on under the label
+ * instead, in as many lines as it takes -- the MQTT topic needs two, and a long
+ * SSID or the key need one. Returns the lines used, so the caller keeps place.
  */
 static int draw_row(uint8_t *fb, int y, const char *label, const char *value)
 {
@@ -81,73 +82,76 @@ static int draw_row(uint8_t *fb, int y, const char *label, const char *value)
         return 1;
     }
 
-    paint_text(fb, LABEL_X + CHAR_W, y + LINE_H + 6, value, SCALE, EPD_BLACK);
-    return 2;
-}
+    /*
+     * Split blind at whatever fits rather than on word boundaries: these are
+     * URIs, topics and keys, which have no words to break at. Scale 1 would
+     * fit them whole, and is not an option -- this panel renders a one-pixel
+     * stroke grey, which is the whole reason the type here is scale 2.
+     */
+    size_t left = strlen(value);
+    const char *p = value;
+    int lines = 1;
 
-/* "3d 04h 17m", truncated to the minute as the clock radio's owner asked. */
-static void format_uptime(char *out, size_t n)
-{
-    const uint64_t minutes = (uint64_t)(esp_timer_get_time() / 60000000);
-    const unsigned d = (unsigned)(minutes / (24 * 60));
-    const unsigned h = (unsigned)((minutes / 60) % 24);
-    const unsigned m = (unsigned)(minutes % 60);
+    while (left > 0) {
+        const size_t n = (left < WRAP_CHARS) ? left : (size_t)WRAP_CHARS;
+        char slice[WRAP_CHARS + 1];
 
-    if (d > 0) {
-        snprintf(out, n, "%ud %02uh %02um", d, h, m);
-    } else if (h > 0) {
-        snprintf(out, n, "%uh %02um", h, m);
-    } else {
-        snprintf(out, n, "%um", m);
+        memcpy(slice, p, n);
+        slice[n] = '\0';
+        paint_text(fb, WRAP_X, y + lines * WRAP_STEP, slice, SCALE, EPD_BLACK);
+
+        p += n;
+        left -= n;
+        lines++;
     }
-}
 
-static void format_api_key(char *out, size_t n)
-{
-#if STATUS_MASK_API_KEY
-    const char *key = OWM_API_KEY;
-    const size_t len = strlen(key);
-
-    if (len <= 8) {
-        snprintf(out, n, "%s", key);     /* too short to be worth hiding */
-    } else {
-        snprintf(out, n, "%.4s...%s  (%u chars)", key, key + len - 4, (unsigned)len);
-    }
-#else
-    snprintf(out, n, "%s", OWM_API_KEY);
-#endif
+    return lines;
 }
 
 static void draw_status(uint8_t *fb)
 {
-    char ip[20], mac[20], ssid[40], key[64], uptime[24], refreshes[16];
+    diag_t d;
+    diagnostics_gather(&d);
 
-    wifi_sta_format_ip(ip, sizeof(ip));
-    wifi_sta_format_mac(mac, sizeof(mac));
-    wifi_sta_format_ssid(ssid, sizeof(ssid));
-    format_api_key(key, sizeof(key));
-    format_uptime(uptime, sizeof(uptime));
-    snprintf(refreshes, sizeof(refreshes), "%lu",
-             (unsigned long)refresh_count_get());
+    char uptime[16], refreshes[16], latlng[32];
+    diagnostics_format_uptime(&d, uptime, sizeof(uptime));
+    snprintf(refreshes, sizeof(refreshes), "%lu", (unsigned long)d.refreshes);
+    snprintf(latlng, sizeof(latlng), "%s,%s", d.latitude, d.longitude);
+
+#if MQTT_ENABLED
+    char every[16];
+    snprintf(every, sizeof(every), "%d S", MQTT_PUBLISH_INTERVAL_S);
+#endif
 
     paint_clear(fb, EPD_WHITE);
 
     paint_text_centered(fb, VIEW_W / 2, TITLE_Y, "STATUS", TITLE_SCALE, EPD_BLACK);
     paint_fill_rect(fb, MARGIN, RULE_Y, VIEW_W - 2 * MARGIN, 3, EPD_BLACK);
 
+    /*
+     * The MQTT rows are compiled in or out with the client itself, so a build
+     * without one does not show three lines about a broker it will never talk
+     * to. Both arrays are indexed together; keep them in step.
+     */
     static const char *LABELS[] = {
-        "SSID", "IP", "MAC", "TIMEZONE", "LATITUDE", "LONGITUDE",
-        "OWM KEY", "REFRESHES", "UPTIME",
+        "SSID", "IP", "MAC", "TIMEZONE", "LAT,LNG", "OWM KEY",
+#if MQTT_ENABLED
+        "MQTT URI", "MQTT TOPIC", "MQTT EVERY",
+#endif
+        "REFRESHES", "UPTIME",
     };
     const char *values[] = {
-        ssid, ip, mac, TIME_ZONE, OWM_LATITUDE, OWM_LONGITUDE,
-        key, refreshes, uptime,
+        d.ssid, d.ip, d.mac, d.timezone, latlng, d.api_key,
+#if MQTT_ENABLED
+        MQTT_BROKER_URI, MQTT_TOPIC, every,
+#endif
+        refreshes, uptime,
     };
 
     int y = FIRST_ROW;
     for (unsigned i = 0; i < sizeof(LABELS) / sizeof(LABELS[0]); i++) {
         const int lines = draw_row(fb, y, LABELS[i], values[i]);
-        y += (lines == 1) ? ROW_STEP : (LINE_H + 6 + ROW_STEP);
+        y += (lines - 1) * WRAP_STEP + ROW_STEP;
     }
 }
 

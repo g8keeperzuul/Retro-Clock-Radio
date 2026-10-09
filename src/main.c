@@ -29,6 +29,7 @@
 #include "epd_5in83g.h"
 #include "epd_clockface.h"
 #include "epd_pattern.h"
+#include "mqtt_report.h"
 #include "refresh_count.h"
 #include "refresh_gauge.h"
 #include "rotary_encoder.h"
@@ -137,6 +138,16 @@ void app_main(void)
         }
 
         ESP_LOGI(TAG, "network joined and clock synced");
+
+        /*
+         * Diagnostics over MQTT. Started only with a network, and not fatal
+         * without a broker: esp-mqtt reconnects on its own, and a radio whose
+         * broker is down is still a radio.
+         */
+        const esp_err_t mqtt_err = mqtt_report_start();
+        if (mqtt_err != ESP_OK) {
+            ESP_LOGW(TAG, "MQTT reporting unavailable: %s", esp_err_to_name(mqtt_err));
+        }
     } else {
         /*
          * Only reachable when WIFI_CONNECT_MAX_RETRY is non-zero. 

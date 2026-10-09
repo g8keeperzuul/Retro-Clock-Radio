@@ -150,6 +150,15 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `GAUGE_TICK_MS` | `200` | How often the remaining time is re-read |
 | `STATUS_LINGER_S` | `120` | How long the diagnostics screen stays up |
 | `STATUS_MASK_API_KEY` | `0` | 1 = show only the first and last four characters of the key |
+| `MQTT_ENABLED` | `1` | 0 = leave the client out of the build |
+| `MQTT_BROKER_URI` | *(required)* | e.g. `mqtt://10.0.0.200:1883` |
+| `MQTT_USERNAME` | `""` | Empty for an anonymous broker |
+| `MQTT_PASSWORD` | `""` | Secret; lives in the ignored `platformio.ini` |
+| `MQTT_TOPIC` | *(required)* | Topic the JSON is published to |
+| `MQTT_PUBLISH_INTERVAL_S` | `10` | Seconds between publishes |
+| `MQTT_QOS` | `0` | |
+| `MQTT_RETAIN` | `1` | Late subscribers get the last reading at once |
+| `MQTT_PUBLISH_API_KEY` | `1` | 0 = omit the key from the payload only |
 | `OWM_API_KEY` | *(required)* | OpenWeather API key |
 | `OWM_FORECAST_PATH` | `/data/2.5/forecast` | Endpoint; `/data/4.0/onecall` requires a credit card on file |
 | `OWM_LATITUDE` | *(required)* | Latitude to forecast for, decimal degrees, quoted |
@@ -193,6 +202,8 @@ the ring of screens.
 - [src/epd_weather.c](src/epd_weather.c) — the daily weather screen
 - [src/epd_forecast.c](src/epd_forecast.c) — the two-day forecast screen
 - [src/epd_status.c](src/epd_status.c) — the diagnostics screen
+- [src/diagnostics.c](src/diagnostics.c) — the fields both the screen and MQTT report
+- [src/mqtt_report.c](src/mqtt_report.c) — diagnostics published as JSON
 - [src/weather_daily.c](src/weather_daily.c) — three-hourly samples reduced to a day apiece
 - [src/weather_aggregate.c](src/weather_aggregate.c) — hourly forecast into four parts of a day
 - [src/weather_api.c](src/weather_api.c) — the HTTPS fetch
@@ -441,6 +452,25 @@ built with. On a screen whose job is to answer "what is this thing talking to",
 the configured value is the one answer that cannot be trusted. The MAC comes
 from efuse, so it is printable before the radio has ever come up.
 
+The three MQTT rows are compiled in and out with the client, so a build with
+`MQTT_ENABLED=0` does not carry three lines about a broker it will never talk
+to. The broker URI is printed as configured — worth remembering that a URI of
+the form `mqtt://user:pass@host` would put those credentials on the glass, and
+that e-paper keeps its last image with no power at all.
+
+A value too wide for its column runs on under the label instead, in as many
+lines as it takes. The topic is the reason: at fifty characters it does not fit
+across the box even at full width, so it takes two. The split is blind rather
+than on word boundaries, because URIs, topics and keys have no words to break
+at. Dropping to scale 1 would fit them whole and is not an option — this panel
+renders a one-pixel stroke grey, which is why the type here is scale 2 in the
+first place.
+
+Eleven rows and fourteen lines is the worst case, with every MQTT field present
+and both the key and the topic wrapped. That fits with about twenty pixels to
+spare, which is what `ROW_STEP` is set from; adding a field means checking it
+again.
+
 ### It shows itself out
 A clock radio left showing a diagnostics page is a clock radio nobody can read
 the time on, so this screen hands the panel back on its own. `SCREENS[]` in
@@ -466,6 +496,50 @@ that way: **e-paper holds its last image with no power at all.** The key stays
 legible on the glass after the radio is unplugged, and survives into any
 photograph of the device. `STATUS_MASK_API_KEY=1` prints the first and last four
 characters instead, which is still enough to tell two keys apart.
+
+## MQTT diagnostics
+The status screen's fields, plus the Wi-Fi signal strength, published as a JSON
+object every `MQTT_PUBLISH_INTERVAL_S`:
+
+```json
+{"ssid":"ETHERCI5","ip":"192.168.137.214","mac":"a0:85:e3:4b:19:7c",
+ "rssi":-57,"online":true,"timezone":"EST5EDT,M3.2.0,M11.1.0",
+ "latitude":"43.9","longitude":"-79.3","owm_api_key":"...",
+ "screen_refreshes":48217,"uptime_minutes":4584,"uptime":"3d 04h 24m",
+ "version":"1.0.0"}
+```
+
+Uptime appears twice on purpose: `uptime_minutes` is for whatever is graphing
+it, `uptime` is for a person reading the topic by hand.
+
+The payload is assembled with cJSON rather than `snprintf`. That is not
+fastidiousness — an SSID is arbitrary bytes, and one containing a quote or a
+backslash would otherwise produce a payload no subscriber could parse. Round
+tripping an SSID of `ETHER"CI5\x` through the broker is part of how this was
+checked.
+
+[src/diagnostics.c](src/diagnostics.c) gathers the fields and both consumers
+read from it, so the panel and the broker cannot come to disagree about what
+the device is, and the API key is masked by one rule wherever it appears.
+
+### It is a state topic, not a discovery topic
+`homeassistant/sensor/retro-clock-radio/diagnostics` sits under Home Assistant's
+discovery prefix but is **not** a discovery message — HA looks for `.../config`
+there and will not create an entity from this on its own. Point an `mqtt` sensor
+at the topic, or publish a discovery payload separately. Worth knowing before
+wondering why nothing appeared.
+
+Messages are retained by default, so a subscriber that connects late gets the
+last reading rather than waiting out an interval.
+
+### The API key goes over the wire
+It is in the payload by default, because the ask was for the same information
+the status screen carries. This is a wider exposure than the panel, though, and
+the difference is worth a thought: port 1883 is **plaintext on the wire**, a
+retained message sits on the broker until something replaces it, and a Home
+Assistant that ingests this will file it in its recorder database and show it in
+history. `MQTT_PUBLISH_API_KEY=0` drops the field from the payload while leaving
+it on the glass; `STATUS_MASK_API_KEY=1` shortens it in both.
 
 ## Weather
 

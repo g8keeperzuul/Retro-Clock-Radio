@@ -305,3 +305,13 @@ size_t wifi_sta_format_ssid(char *buf, size_t len)
 
     return (size_t)snprintf(buf, len, "%.32s", (const char *)ap.ssid);
 }
+
+int wifi_sta_rssi(void)
+{
+    wifi_ap_record_t ap;
+
+    if (!s_connected || esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return 0;
+    }
+    return ap.rssi;
+}
