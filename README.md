@@ -147,6 +147,8 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `GAUGE_LED_COUNT` | `6` | Pixels on the strip |
 | `GAUGE_BRIGHTNESS` | `40` | Out of 255, matching the knob |
 | `GAUGE_TICK_MS` | `200` | How often the remaining time is re-read |
+| `STATUS_LINGER_S` | `120` | How long the diagnostics screen stays up |
+| `STATUS_MASK_API_KEY` | `0` | 1 = show only the first and last four characters of the key |
 | `OWM_API_KEY` | *(required)* | OpenWeather API key |
 | `OWM_FORECAST_PATH` | `/data/2.5/forecast` | Endpoint; `/data/4.0/onecall` requires a credit card on file |
 | `OWM_LATITUDE` | *(required)* | Latitude to forecast for, decimal degrees, quoted |
@@ -189,6 +191,7 @@ the ring of screens.
 - [src/epd_font.c](src/epd_font.c) — bitmap text; faces generated from the TTF
 - [src/epd_weather.c](src/epd_weather.c) — the daily weather screen
 - [src/epd_forecast.c](src/epd_forecast.c) — the two-day forecast screen
+- [src/epd_status.c](src/epd_status.c) — the diagnostics screen
 - [src/weather_daily.c](src/weather_daily.c) — three-hourly samples reduced to a day apiece
 - [src/weather_aggregate.c](src/weather_aggregate.c) — hourly forecast into four parts of a day
 - [src/weather_api.c](src/weather_api.c) — the HTTPS fetch
@@ -233,7 +236,7 @@ whichever task runs it.
 
 ### Choosing a screen
 [src/screen_manager.c](src/screen_manager.c) is the only thing that writes to the
-panel. The screens are a **ring** — clock, weather dial, two-day forecast — and
+panel. The screens are a **ring** — clock, weather dial, two-day forecast, status — and
 turning the encoder walks it: clockwise forward, anticlockwise back, both
 wrapping. The order in `SCREENS[]` is the order the knob walks, and adding a
 screen means a line in that table and a draw function, nothing else. The
@@ -294,7 +297,8 @@ change is accepted but held off by the 180-second floor, the strip fills and the
 empties as the wait runs down, all six going dark as the refresh begins.
 
 The colour is the screen that is *coming*, not the one showing — 🟡 yellow for
-the clock, 🔵 blue for the weather dial, and cyan for the two-day forecast. Those live in `SCREENS[]` in
+the clock, 🔵 blue for the weather dial, cyan for the two-day forecast and
+violet for status. Those live in `SCREENS[]` in
 [screen_manager.c](src/screen_manager.c) beside the name and draw function, on the
 same principle that put the knob's verdict colours inside the encoder driver:
 whoever owns the vocabulary owns the mapping. The gauge knows only red, green and
@@ -393,6 +397,49 @@ when thresholded to one bit, which is what sets `FONT_LABEL`.
 All type is black. The dial used to set its numerals in yellow behind a black
 outline, which suited the blocky face it had then; a one-pixel outline on a
 three-pixel stem leaves nothing.
+
+## Status screen
+A diagnostics screen: what the radio joined, what it answers on, what it
+forecasts with, how much life the panel has left and how long it has been up.
+
+![status](./docs/pictures/status.png)
+
+Set in the plain **5x7 font**, not the Deco face the other screens use. That is
+not a shortcut — this is the one screen read character by character, and a
+decorative face makes `8` and `B`, `0` and `O` harder to tell apart, which is
+exactly the distinction a MAC address or an API key turns on.
+
+The SSID is the network **actually associated with**, read from
+`esp_wifi_sta_get_ap_info()` rather than from the `WIFI_SSID` the firmware was
+built with. On a screen whose job is to answer "what is this thing talking to",
+the configured value is the one answer that cannot be trusted. The MAC comes
+from efuse, so it is printable before the radio has ever come up.
+
+### It shows itself out
+A clock radio left showing a diagnostics page is a clock radio nobody can read
+the time on, so this screen hands the panel back on its own. `SCREENS[]` in
+[screen_manager.c](src/screen_manager.c) gained a `linger_s` and a `then`, zero
+meaning "stay until the knob says otherwise" — which is what every other screen
+wants, and which keeps the behaviour in the same table as everything else about
+a screen rather than special-cased in the task.
+
+The timer is armed **after** the refresh completes, not when the screen is
+asked for, so `STATUS_LINGER_S` is time the screen is readable rather than time
+half-eaten by its own 25-second refresh. Turning the knob cancels it: a hand on
+the dial outranks a timer.
+
+One honest wrinkle: the panel's 180-second floor outranks both. The switch is
+*requested* at 120 s and the panel actually changes at 180 s, with the countdown
+strip showing yellow for the clock it is on its way to. Set `STATUS_LINGER_S` to
+180 if you would rather the two numbers agree.
+
+### The API key is on there
+It is printed in full by default, because a diagnostics screen that cannot tell
+you which key was flashed is not doing its job. Worth knowing before leaving it
+that way: **e-paper holds its last image with no power at all.** The key stays
+legible on the glass after the radio is unplugged, and survives into any
+photograph of the device. `STATUS_MASK_API_KEY=1` prints the first and last four
+characters instead, which is still enough to tell two keys apart.
 
 ## Weather
 

@@ -231,6 +231,24 @@ build_flags =
     ; frames -- this sets the resolution, not the cost.
     -D GAUGE_TICK_MS=200
 
+    ; --- Status screen -----------------------------------------------------
+    ; The diagnostics screen hands the panel back to the clock after this long.
+    ; Measured from the moment it finishes rendering, not from when it was
+    ; asked for, so the two minutes are two minutes of it being readable.
+    ;
+    ; Note the panel's own 180 s floor outranks this: the switch is *requested*
+    ; at 120 s and happens at 180 s, with the countdown strip showing the wait.
+    ; Set this to 180 or more if you would rather the two numbers agree.
+    -D STATUS_LINGER_S=120
+
+    ; Set to 1 to print only the first and last four characters of the API key,
+    ; which is still enough to tell two keys apart. It is shown whole by
+    ; default, because a diagnostics screen that cannot tell you which key was
+    ; flashed is not doing its job -- but e-paper holds its last image with no
+    ; power at all, so the key stays legible on the glass after the radio is
+    ; unplugged, and survives into any photograph of the device.
+    -D STATUS_MASK_API_KEY=0
+
 ; Enable core debug output to see early boot logs
 ;    -D CORE_DEBUG_LEVEL=5
 

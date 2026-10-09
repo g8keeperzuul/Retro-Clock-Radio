@@ -7,6 +7,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -40,6 +41,19 @@ bool wifi_sta_is_connected(void);
 
 /* Reason code from the most recent disconnect (wifi_err_reason_t), 0 if none. */
 uint8_t wifi_sta_last_disconnect_reason(void);
+
+/*
+ * What the station is, for the diagnostics screen. Each writes a NUL-terminated
+ * string and returns its length, or writes "--" and returns 0 when there is
+ * nothing to report -- a caller drawing a panel wants something to draw either
+ * way, not an error to handle.
+ *
+ * The SSID is the one actually associated with, which is not necessarily
+ * WIFI_SSID: that is the whole point of putting it on a diagnostics screen.
+ */
+size_t wifi_sta_format_ip(char *buf, size_t len);
+size_t wifi_sta_format_mac(char *buf, size_t len);
+size_t wifi_sta_format_ssid(char *buf, size_t len);
 
 #ifdef __cplusplus
 }

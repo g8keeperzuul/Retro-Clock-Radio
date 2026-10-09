@@ -1,6 +1,7 @@
 #include "wifi_sta.h"
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_event.h"
@@ -249,4 +250,58 @@ bool wifi_sta_is_connected(void)
 uint8_t wifi_sta_last_disconnect_reason(void)
 {
     return s_last_reason;
+}
+
+/* ---- What the station is, for the diagnostics screen -------------------- */
+
+/* "--" for a field with nothing in it, so a caller always has something to draw. */
+static size_t nothing(char *buf, size_t len)
+{
+    if (len > 0) {
+        snprintf(buf, len, "--");
+    }
+    return 0;
+}
+
+size_t wifi_sta_format_ip(char *buf, size_t len)
+{
+    esp_netif_ip_info_t ip;
+
+    if (s_sta_netif == NULL || !s_connected ||
+        esp_netif_get_ip_info(s_sta_netif, &ip) != ESP_OK || ip.ip.addr == 0) {
+        return nothing(buf, len);
+    }
+
+    return (size_t)snprintf(buf, len, IPSTR, IP2STR(&ip.ip));
+}
+
+size_t wifi_sta_format_mac(char *buf, size_t len)
+{
+    uint8_t mac[6];
+
+    /*
+     * Read from efuse rather than from the interface: it is the same address,
+     * and it is there to be printed before the radio has ever come up.
+     */
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+        return nothing(buf, len);
+    }
+
+    return (size_t)snprintf(buf, len, MACSTR, MAC2STR(mac));
+}
+
+size_t wifi_sta_format_ssid(char *buf, size_t len)
+{
+    wifi_ap_record_t ap;
+
+    /*
+     * The network actually joined, not the one asked for. On a screen whose
+     * job is to answer "what is this thing connected to", the configured value
+     * is the one answer that cannot be trusted.
+     */
+    if (!s_connected || esp_wifi_sta_get_ap_info(&ap) != ESP_OK || ap.ssid[0] == '\0') {
+        return nothing(buf, len);
+    }
+
+    return (size_t)snprintf(buf, len, "%.32s", (const char *)ap.ssid);
 }

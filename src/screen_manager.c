@@ -4,6 +4,7 @@
 #include "screen_manager.h"
 
 #include "clock_display.h"
+#include "epd_status.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -40,6 +41,14 @@ static const char *TAG = "screen";
 #define GAUGE_BRIGHTNESS 40
 #endif
 
+/*
+ * How long the diagnostics screen stays up before handing the panel back. It
+ * is a screen you glance at, not one to leave a clock radio showing.
+ */
+#ifndef STATUS_LINGER_S
+#define STATUS_LINGER_S 120
+#endif
+
 /* The floor the panel datasheet puts on how often it may be refreshed. */
 #define MIN_REFRESH_INTERVAL_S 180
 
@@ -64,15 +73,24 @@ static const char *TAG = "screen";
  * up, in unit components scaled by GAUGE_BRIGHTNESS -- the same shape as FLASH[]
  * in rotary_encoder.c. It lives here rather than in the gauge because screens
  * are this file's vocabulary: the gauge knows only red, green and blue.
+ *
+ * `linger_s` is for a screen that should not be left up: once it has been on
+ * the glass that long, the manager moves to `then` on its own. Zero means the
+ * screen stays until the knob says otherwise, which is what all but the
+ * diagnostics screen want.
  */
 static const struct {
     const char *name;
     esp_err_t (*draw)(void);
     uint8_t r, g, b;
+    uint16_t linger_s;
+    screen_id_t then;
 } SCREENS[SCREEN_COUNT] = {
     [SCREEN_CLOCK]    = {"clock",    clock_display_draw,            1, 1, 0},  /* yellow */
     [SCREEN_WEATHER]  = {"weather",  weather_display_draw,          0, 0, 1},  /* blue   */
     [SCREEN_FORECAST] = {"forecast", weather_display_draw_forecast, 0, 1, 1},  /* cyan   */
+    [SCREEN_STATUS]   = {"status",   epd_status_show,               1, 0, 1,   /* violet */
+                         STATUS_LINGER_S, SCREEN_CLOCK},
 };
 
 static TaskHandle_t s_task;
@@ -107,6 +125,14 @@ static int64_t s_last_refresh_us;
  * follows from s_last_refresh_us, which cannot move while a change is pending.
  */
 static int64_t s_gauge_total_us;
+
+/*
+ * When the screen on the glass should give way on its own, or 0 when it should
+ * not. Armed after a refresh rather than before, so the two minutes a
+ * diagnostics screen is asked to stay up are two minutes of it being readable
+ * -- not two minutes that the refresh itself eats half of.
+ */
+static int64_t s_linger_deadline_us;
 
 /*
  * Guards s_pending, s_stale, s_generation and s_last_refresh_us, each of which
@@ -337,8 +363,15 @@ static void refresh(screen_id_t screen)
     s_on_glass = screen;
     s_drawn = true;
 
+    const int64_t now = esp_timer_get_time();
+
+    /* Armed only now, so the screen's time starts when it becomes readable. */
+    s_linger_deadline_us = (SCREENS[screen].linger_s > 0)
+                               ? now + (int64_t)SCREENS[screen].linger_s * 1000000
+                               : 0;
+
     portENTER_CRITICAL(&s_lock);
-    s_last_refresh_us = esp_timer_get_time();
+    s_last_refresh_us = now;
     portEXIT_CRITICAL(&s_lock);
 }
 
@@ -347,7 +380,17 @@ static void screen_task(void *arg)
     (void)arg;
 
     while (true) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        /*
+         * Sleep until something wants the glass -- or, if the screen showing is
+         * one that gives way on its own, until its welcome runs out.
+         */
+        TickType_t patience = portMAX_DELAY;
+        if (s_linger_deadline_us != 0) {
+            const int64_t left_ms = (s_linger_deadline_us - esp_timer_get_time()) / 1000;
+            patience = (left_ms > 0) ? pdMS_TO_TICKS(left_ms) : 1;
+        }
+
+        ulTaskNotifyTake(pdTRUE, patience);
 
         /*
          * Let the knob settle. Every further wake-up restarts the window, so
@@ -364,7 +407,15 @@ static void screen_task(void *arg)
 
         if (detents != 0) {
             s_active = ring_step(s_active, detents);
+            s_linger_deadline_us = 0;    /* the knob outranks the timer */
             ESP_LOGI(TAG, "knob moved %+d: showing the %s screen", detents,
+                     SCREENS[s_active].name);
+        } else if (s_linger_deadline_us != 0 &&
+                   esp_timer_get_time() >= s_linger_deadline_us) {
+            s_linger_deadline_us = 0;
+            s_active = SCREENS[s_on_glass].then;
+            ESP_LOGI(TAG, "%s screen has had its %u s: back to the %s screen",
+                     SCREENS[s_on_glass].name, (unsigned)SCREENS[s_on_glass].linger_s,
                      SCREENS[s_active].name);
         }
 
