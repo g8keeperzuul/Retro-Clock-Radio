@@ -289,6 +289,20 @@ build_flags =
     ; Assistant will file it in its recorder database and show it in history.
     -D MQTT_PUBLISH_API_KEY=0
 
+    ; Availability. "online" is published here on every connect; "offline" is
+    ; a last will, handed to the broker in the CONNECT packet and published by
+    ; the broker when this device stops answering. Both are retained, so a
+    ; subscriber connecting later is told the current state at once.
+    ;
+    ; Defaults to homeassistant/sensor/<WIFI_HOSTNAME>/availability.
+    ;-D MQTT_AVAILABILITY_TOPIC=\"homeassistant/sensor/retro-clock-radio/availability\"
+
+    ; How long the broker waits for a sign of life before declaring the will.
+    ; esp-mqtt's own default is 120 s, which makes for a slow healthcheck: the
+    ; client checks in at half this interval, so 30 means a dead radio is
+    ; noticed within about 45 s rather than two and a half minutes.
+    -D MQTT_KEEPALIVE_S=30
+
 ; Enable core debug output to see early boot logs
 ;    -D CORE_DEBUG_LEVEL=5
 

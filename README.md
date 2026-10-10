@@ -159,6 +159,8 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `MQTT_QOS` | `0` | |
 | `MQTT_RETAIN` | `1` | Late subscribers get the last reading at once |
 | `MQTT_PUBLISH_API_KEY` | `1` | 0 = omit the key from the payload only |
+| `MQTT_AVAILABILITY_TOPIC` | `homeassistant/sensor/<WIFI_HOSTNAME>/availability` | Where online/offline goes |
+| `MQTT_KEEPALIVE_S` | `30` | How fast the broker notices a dead device |
 | `OWM_API_KEY` | *(required)* | OpenWeather API key |
 | `OWM_FORECAST_PATH` | `/data/2.5/forecast` | Endpoint; `/data/4.0/onecall` requires a credit card on file |
 | `OWM_LATITUDE` | *(required)* | Latitude to forecast for, decimal degrees, quoted |
@@ -521,6 +523,40 @@ checked.
 [src/diagnostics.c](src/diagnostics.c) gathers the fields and both consumers
 read from it, so the panel and the broker cannot come to disagree about what
 the device is, and the API key is masked by one rule wherever it appears.
+
+### Availability, and who publishes "offline"
+A second topic carries nothing but the words `online` and `offline`:
+
+```
+homeassistant/sensor/<WIFI_HOSTNAME>/availability
+```
+
+The device publishes only the first of those. The second is a **last will**:
+handed to the broker inside the CONNECT packet, before this client has sent
+anything at all, and published by the broker *on the device's behalf* when it
+stops answering. That is the whole point of the mechanism — a radio that has
+crashed, been unplugged or fallen off the Wi-Fi cannot announce it, so the
+broker is asked in advance to do it.
+
+Both are **retained**, so a subscriber connecting later is told the current
+state immediately rather than waiting for it to change.
+
+`online` is published from the connect event rather than the reporting task, so
+it goes out on every reconnect and goes out at once: waiting for the next
+interval would leave the device reading `offline` for minutes after it had
+plainly come back.
+
+Two things about last wills that are easy to be caught by:
+
+- **A clean disconnect does not trigger one.** If a client sends a proper
+  DISCONNECT the broker drops the will unsent, by design. This firmware never
+  stops its client, so the only way out is the ungraceful one — which is the
+  case worth detecting anyway.
+- **"Stops answering" is measured by the keepalive.** esp-mqtt defaults to
+  120 s, so a device that died a moment after checking in would read `online`
+  for two and a half minutes. `MQTT_KEEPALIVE_S` is set to 30 instead: the
+  client checks in every 15, and the broker gives up within about 45. The cost
+  is a couple of two-byte packets a minute.
 
 ### It is a state topic, not a discovery topic
 `homeassistant/sensor/retro-clock-radio/diagnostics` sits under Home Assistant's

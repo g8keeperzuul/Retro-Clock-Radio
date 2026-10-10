@@ -48,6 +48,44 @@ static const char *TAG = "mqtt";
 #endif
 
 /*
+ * The availability topic: "online" while the device is connected, "offline"
+ * once it is not.
+ *
+ * The device publishes only the first of those. The second is a *last will* --
+ * handed to the broker at connect time, and published by the broker on the
+ * device's behalf when the connection drops. That is the whole point: a radio
+ * that has crashed, been unplugged or fallen off the network cannot announce
+ * it, so the broker is asked in advance to do it.
+ *
+ * Both are retained, so a subscriber connecting later is told the current state
+ * at once rather than waiting for the next change.
+ */
+#ifndef WIFI_HOSTNAME
+#define WIFI_HOSTNAME "retro-clock-radio"
+#endif
+#ifndef MQTT_AVAILABILITY_TOPIC
+#define MQTT_AVAILABILITY_TOPIC "homeassistant/sensor/" WIFI_HOSTNAME "/availability"
+#endif
+#ifndef MQTT_ONLINE_PAYLOAD
+#define MQTT_ONLINE_PAYLOAD "online"
+#endif
+#ifndef MQTT_OFFLINE_PAYLOAD
+#define MQTT_OFFLINE_PAYLOAD "offline"
+#endif
+
+/*
+ * How long the broker waits for a sign of life before declaring the will.
+ *
+ * esp-mqtt defaults to 120 s, which makes for a slow healthcheck: a device that
+ * dies the instant after a keepalive goes on reading "online" for two minutes
+ * and change. 30 s has the client checking in every 15 and the broker giving up
+ * within about 45 -- the cost is a handful of two-byte packets an hour.
+ */
+#ifndef MQTT_KEEPALIVE_S
+#define MQTT_KEEPALIVE_S 30
+#endif
+
+/*
  * Whether the OpenWeather key goes out over the wire at all.
  *
  * On by default because the ask was for the same information the status screen
@@ -81,8 +119,20 @@ static void on_mqtt_event(void *handler_args, esp_event_base_t base, int32_t id,
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
         s_connected = true;
+
+        /*
+         * Retract the will the moment there is a connection to retract it
+         * with. Published from the event handler rather than the reporting
+         * task so that it goes out on every reconnect, and immediately --
+         * waiting for the next interval would leave the device reading
+         * "offline" for minutes after it had plainly come back.
+         */
+        esp_mqtt_client_publish(s_client, MQTT_AVAILABILITY_TOPIC,
+                                MQTT_ONLINE_PAYLOAD, 0, MQTT_QOS, 1);
+
         /* Never log the URI: MQTT_BROKER_URI may carry credentials. */
-        ESP_LOGI(TAG, "connected, publishing to %s every %d s", MQTT_TOPIC,
+        ESP_LOGI(TAG, "connected; %s on %s, diagnostics to %s every %d s",
+                 MQTT_ONLINE_PAYLOAD, MQTT_AVAILABILITY_TOPIC, MQTT_TOPIC,
                  MQTT_PUBLISH_INTERVAL_S);
         break;
 
@@ -189,6 +239,21 @@ esp_err_t mqtt_report_start(void)
         .credentials = {
             .username = (MQTT_USERNAME[0] != '\0') ? MQTT_USERNAME : NULL,
             .authentication.password = (MQTT_PASSWORD[0] != '\0') ? MQTT_PASSWORD : NULL,
+        },
+        .session = {
+            /*
+             * Given to the broker in the CONNECT packet, so it is in place
+             * before anything can go wrong -- including before this client has
+             * published a single thing.
+             */
+            .last_will = {
+                .topic = MQTT_AVAILABILITY_TOPIC,
+                .msg = MQTT_OFFLINE_PAYLOAD,
+                .msg_len = sizeof(MQTT_OFFLINE_PAYLOAD) - 1,
+                .qos = MQTT_QOS,
+                .retain = 1,
+            },
+            .keepalive = MQTT_KEEPALIVE_S,
         },
     };
 
