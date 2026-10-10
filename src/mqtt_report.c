@@ -27,8 +27,8 @@ static const char *TAG = "mqtt";
 #ifndef MQTT_BROKER_URI
 #error "MQTT_BROKER_URI is not defined. Add -D MQTT_BROKER_URI=\\\"mqtt://host:1883\\\" to build_flags in platformio.ini"
 #endif
-#ifndef MQTT_TOPIC
-#error "MQTT_TOPIC is not defined. Add -D MQTT_TOPIC=\\\"some/topic\\\" to build_flags in platformio.ini"
+#ifndef MQTT_DIAGNOSTIC_TOPIC
+#error "MQTT_DIAGNOSTIC_TOPIC is not defined. Add -D MQTT_DIAGNOSTIC_TOPIC=\\\"some/topic\\\" to build_flags in platformio.ini"
 #endif
 
 #ifndef MQTT_USERNAME
@@ -132,7 +132,7 @@ static void on_mqtt_event(void *handler_args, esp_event_base_t base, int32_t id,
 
         /* Never log the URI: MQTT_BROKER_URI may carry credentials. */
         ESP_LOGI(TAG, "connected; %s on %s, diagnostics to %s every %d s",
-                 MQTT_ONLINE_PAYLOAD, MQTT_AVAILABILITY_TOPIC, MQTT_TOPIC,
+                 MQTT_ONLINE_PAYLOAD, MQTT_AVAILABILITY_TOPIC, MQTT_DIAGNOSTIC_TOPIC,
                  MQTT_PUBLISH_INTERVAL_S);
         break;
 
@@ -217,7 +217,7 @@ static void mqtt_report_task(void *arg)
             char *payload = build_payload();
 
             if (payload != NULL) {
-                const int id = esp_mqtt_client_publish(s_client, MQTT_TOPIC, payload, 0,
+                const int id = esp_mqtt_client_publish(s_client, MQTT_DIAGNOSTIC_TOPIC, payload, 0,
                                                        MQTT_QOS, MQTT_RETAIN);
                 if (id < 0) {
                     ESP_LOGW(TAG, "publish failed");

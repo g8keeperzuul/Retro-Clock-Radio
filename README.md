@@ -154,7 +154,7 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `MQTT_BROKER_URI` | *(required)* | e.g. `mqtt://10.0.0.200:1883` |
 | `MQTT_USERNAME` | `""` | Empty for an anonymous broker |
 | `MQTT_PASSWORD` | `""` | Secret; lives in the ignored `platformio.ini` |
-| `MQTT_TOPIC` | *(required)* | Topic the JSON is published to |
+| `MQTT_DIAGNOSTIC_TOPIC` | *(required)* | Topic the JSON is published to |
 | `MQTT_PUBLISH_INTERVAL_S` | `10` | Seconds between publishes |
 | `MQTT_QOS` | `0` | |
 | `MQTT_RETAIN` | `1` | Late subscribers get the last reading at once |
@@ -505,7 +505,7 @@ object every `MQTT_PUBLISH_INTERVAL_S`:
 
 ```json
 {"ssid":"ETHERCI5","ip":"192.168.137.214","mac":"a0:85:e3:4b:19:7c",
- "rssi":-57,"online":true,"timezone":"EST5EDT,M3.2.0,M11.1.0",
+ "rssi":-57,"timezone":"EST5EDT,M3.2.0,M11.1.0",
  "latitude":"43.9","longitude":"-79.3","owm_api_key":"...",
  "screen_refreshes":48217,"uptime_minutes":4584,"uptime":"3d 04h 24m",
  "version":"1.0.0"}

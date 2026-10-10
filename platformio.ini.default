@@ -273,7 +273,7 @@ build_flags =
     ; discovery topic -- HA looks for .../config under the homeassistant/
     ; prefix, so it will not create an entity from this on its own. Point an
     ; mqtt sensor at it, or publish a discovery message separately.
-    -D MQTT_TOPIC=\"homeassistant/sensor/retro-clock-radio/diagnostics\"
+    -D MQTT_DIAGNOSTIC_TOPIC=\"homeassistant/sensor/retro-clock-radio/diagnostics\"
 
     ; How often to publish, in seconds.
     -D MQTT_PUBLISH_INTERVAL_S=300
