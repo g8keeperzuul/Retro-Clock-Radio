@@ -1,5 +1,7 @@
 #include "time_sync.h"
 
+#include "settings.h"
+
 #include <inttypes.h>
 #include <stdlib.h>
 #include <sys/time.h>
@@ -70,7 +72,11 @@ esp_err_t time_sync_start(void)
     }
 
     /* Timezone first, so the very first sync callback prints local time. */
-    setenv("TZ", TIME_ZONE, 1);
+    /*
+     * settings_init() has already applied this; doing it again costs nothing
+     * and means time_sync_start() is still correct if the order ever changes.
+     */
+    setenv("TZ", settings_get(SETTING_TIMEZONE), 1);
     tzset();
 
     esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(NTP_SERVER);
@@ -90,7 +96,8 @@ esp_err_t time_sync_start(void)
 
     esp_sntp_set_sync_interval(NTP_SYNC_INTERVAL_MS);
     ESP_LOGI(TAG, "sntp client started, server %s, tz %s, resync every %d s",
-             NTP_SERVER, TIME_ZONE, NTP_SYNC_INTERVAL_MS / 1000);
+             NTP_SERVER, settings_get(SETTING_TIMEZONE),
+             NTP_SYNC_INTERVAL_MS / 1000);
     return ESP_OK;
 }
 

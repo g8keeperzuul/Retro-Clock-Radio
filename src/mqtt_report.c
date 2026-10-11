@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "settings.h"
 #include "mqtt_client.h"
 
 static const char *TAG = "mqtt";
@@ -100,6 +101,20 @@ static const char *TAG = "mqtt";
 #endif
 
 /*
+ * Whether the key is broadcast on its own get topic.
+ *
+ * Follows MQTT_PUBLISH_API_KEY, the same switch that governs the diagnostics
+ * payload: with it off, the get topic carries the masked form rather than the
+ * key. The get topic is retained, so publishing it whole leaves the key sitting
+ * on the broker until something replaces it -- a wider exposure than the panel,
+ * and a different one from being able to *set* it, which still works either
+ * way. Turn MQTT_PUBLISH_API_KEY on if a round-trip of get and set matters more.
+ */
+
+/* homeassistant/<kind>/<host>/<PARAM>/<get|set>, the longest being about 85. */
+#define TOPIC_MAX 128
+
+/*
  * Small: the payload is a few hundred bytes and the client does the sending.
  * The JSON is built with cJSON rather than snprintf because an SSID is
  * arbitrary bytes -- one with a quote or a backslash in it would otherwise
@@ -110,6 +125,126 @@ static const char *TAG = "mqtt";
 
 static esp_mqtt_client_handle_t s_client;
 static bool s_connected;
+static TaskHandle_t s_task;
+
+/* ---- Parameters over MQTT ------------------------------------------------ */
+
+/* homeassistant/<kind>/<host>/<PARAM>/<verb> */
+static void param_topic(char *buf, size_t len, setting_id_t id, const char *verb)
+{
+    snprintf(buf, len, "homeassistant/%s/%s/%s/%s", settings_kind(id),
+             WIFI_HOSTNAME, settings_name(id), verb);
+}
+
+/*
+ * Publish a parameter's current value on its get topic, retained so that a
+ * subscriber connecting later is told it without having to ask.
+ */
+static void publish_param(setting_id_t id)
+{
+    char topic[TOPIC_MAX];
+    param_topic(topic, sizeof(topic), id, "get");
+
+    const char *value = settings_get(id);
+
+#if !MQTT_PUBLISH_API_KEY
+    /*
+     * The key is the one parameter whose value is a secret. With the switch
+     * off it is still reported -- a get topic that said nothing would be
+     * worse -- but only enough of it to tell one key from another.
+     */
+    char masked[24];
+    if (id == SETTING_API_KEY) {
+        const size_t n = strlen(value);
+        if (n > 8) {
+            snprintf(masked, sizeof(masked), "%.4s...%s", value, value + n - 4);
+            value = masked;
+        }
+    }
+#endif
+
+    esp_mqtt_client_publish(s_client, topic, value, 0, MQTT_QOS, 1);
+}
+
+/* Subscribe to every set topic and announce every current value. */
+static void publish_all_params(void)
+{
+    for (int id = 0; id < SETTING_COUNT; id++) {
+        char topic[TOPIC_MAX];
+
+        param_topic(topic, sizeof(topic), (setting_id_t)id, "set");
+        esp_mqtt_client_subscribe(s_client, topic, MQTT_QOS);
+
+        publish_param((setting_id_t)id);
+    }
+}
+
+/*
+ * A message on a set topic. The event's topic and data are counted, not
+ * NUL-terminated, so both are copied before anything looks at them.
+ */
+static void on_set_message(const char *topic, int topic_len, const char *data,
+                           int data_len)
+{
+    for (int id = 0; id < SETTING_COUNT; id++) {
+        char want[TOPIC_MAX];
+        param_topic(want, sizeof(want), (setting_id_t)id, "set");
+
+        if ((int)strlen(want) != topic_len || strncmp(want, topic, topic_len) != 0) {
+            continue;
+        }
+
+        char value[80];
+        if (data_len < 0 || (size_t)data_len >= sizeof(value)) {
+            ESP_LOGW(TAG, "%s: ignoring an oversized value", settings_name(id));
+            return;
+        }
+        memcpy(value, data, data_len);
+        value[data_len] = '\0';
+
+        /*
+         * An empty payload means "go back to the built-in value". It is the
+         * natural reading, and it is also how a retained set topic is cleared,
+         * so the two agree rather than fighting.
+         */
+        const esp_err_t err = (data_len == 0) ? settings_reset((setting_id_t)id)
+                                              : settings_set((setting_id_t)id, value);
+
+        if (err != ESP_OK) {
+            /*
+             * Republish regardless. A rejected set leaves the get topic
+             * disagreeing with whatever the sender believes, and saying so is
+             * the only acknowledgement this protocol has.
+             */
+            ESP_LOGW(TAG, "%s: rejected", settings_name(id));
+        }
+        publish_param((setting_id_t)id);
+        return;
+    }
+
+    ESP_LOGD(TAG, "message on an unrecognised topic");
+}
+
+/*
+ * Any parameter changing, from here or from anywhere else. The get topic is
+ * republished so the broker's copy never lags the device's.
+ */
+static void on_setting_changed(setting_id_t id)
+{
+    if (s_connected) {
+        publish_param(id);
+    }
+
+    /*
+     * The publishing task may be most of an interval into a sleep. Wake it so
+     * a new interval takes effect now rather than after the old one expires --
+     * which, going from an hour to ten seconds, is the difference between
+     * "instantly" and "eventually".
+     */
+    if (id == SETTING_MQTT_INTERVAL && s_task != NULL) {
+        xTaskNotifyGive(s_task);
+    }
+}
 
 static void on_mqtt_event(void *handler_args, esp_event_base_t base, int32_t id,
                           void *event_data)
@@ -130,10 +265,21 @@ static void on_mqtt_event(void *handler_args, esp_event_base_t base, int32_t id,
         esp_mqtt_client_publish(s_client, MQTT_AVAILABILITY_TOPIC,
                                 MQTT_ONLINE_PAYLOAD, 0, MQTT_QOS, 1);
 
+        /*
+         * Subscribing and announcing belong here rather than in the task for
+         * the same reason the will does: a subscription does not survive a
+         * reconnect, so it has to be remade every time one happens.
+         */
+        publish_all_params();
+
         /* Never log the URI: MQTT_BROKER_URI may carry credentials. */
-        ESP_LOGI(TAG, "connected; %s on %s, diagnostics to %s every %d s",
+        ESP_LOGI(TAG, "connected; %s on %s, diagnostics to %s every %ld s",
                  MQTT_ONLINE_PAYLOAD, MQTT_AVAILABILITY_TOPIC, MQTT_DIAGNOSTIC_TOPIC,
-                 MQTT_PUBLISH_INTERVAL_S);
+                 (long)settings_get_int(SETTING_MQTT_INTERVAL));
+        break;
+
+    case MQTT_EVENT_DATA:
+        on_set_message(ev->topic, ev->topic_len, ev->data, ev->data_len);
         break;
 
     case MQTT_EVENT_DISCONNECTED:
@@ -228,7 +374,13 @@ static void mqtt_report_task(void *arg)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(MQTT_PUBLISH_INTERVAL_S * 1000));
+        /*
+         * Read the interval every pass rather than caching it, and sleep on a
+         * notification rather than a plain delay, so that a change over MQTT
+         * both takes effect and cuts the current sleep short.
+         */
+        const int32_t every = settings_get_int(SETTING_MQTT_INTERVAL);
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((every > 0 ? every : 1) * 1000));
     }
 }
 
@@ -274,9 +426,12 @@ esp_err_t mqtt_report_start(void)
         return err;
     }
 
-    if (xTaskCreate(mqtt_report_task, "mqtt", TASK_STACK, NULL, TASK_PRIO, NULL) != pdPASS) {
+    if (xTaskCreate(mqtt_report_task, "mqtt", TASK_STACK, NULL, TASK_PRIO,
+                    &s_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
+
+    settings_subscribe(on_setting_changed);
 
     return ESP_OK;
 }

@@ -3,12 +3,14 @@
  */
 #include "weather_api.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "settings.h"
 #include "weather_mock_data.h"
 
 static const char *TAG = "wx-api";
@@ -58,9 +60,22 @@ static const char *TAG = "wx-api";
 #define BODY_CEILING (128 * 1024)
 #define BODY_INITIAL (32 * 1024)
 
-#define OWM_URL "https://api.openweathermap.org" OWM_FORECAST_PATH  \
-                "?lat=" OWM_LATITUDE "&lon=" OWM_LONGITUDE          \
-                "&units=" OWM_UNITS "&appid=" OWM_API_KEY
+/*
+ * The URL is built per fetch rather than concatenated at compile time: the
+ * coordinates and the key can all be changed over MQTT now, and a macro would
+ * freeze whatever was flashed. Long enough for a 64-character key and a pair
+ * of full-precision coordinates.
+ */
+#define URL_MAX 256
+
+static void build_url(char *out, size_t len)
+{
+    snprintf(out, len,
+             "https://api.openweathermap.org" OWM_FORECAST_PATH
+             "?lat=%s&lon=%s&units=" OWM_UNITS "&appid=%s",
+             settings_get(SETTING_LATITUDE), settings_get(SETTING_LONGITUDE),
+             settings_get(SETTING_API_KEY));
+}
 
 static void *body_alloc(size_t size)
 {
@@ -103,8 +118,11 @@ esp_err_t weather_api_fetch(char **body, size_t *len)
 
 esp_err_t weather_api_fetch(char **body, size_t *len)
 {
+    char url[URL_MAX];
+    build_url(url, sizeof(url));
+
     esp_http_client_config_t cfg = {
-        .url = OWM_URL,
+        .url = url,
         .method = HTTP_METHOD_GET,
         .timeout_ms = OWM_HTTP_TIMEOUT_MS,
         .crt_bundle_attach = esp_crt_bundle_attach,

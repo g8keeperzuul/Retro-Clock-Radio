@@ -31,6 +31,7 @@
 #include "epd_pattern.h"
 #include "mqtt_report.h"
 #include "refresh_count.h"
+#include "settings.h"
 #include "refresh_gauge.h"
 #include "rotary_encoder.h"
 #include "screen_manager.h"
@@ -108,6 +109,13 @@ void app_main(void)
      * anything has a chance to refresh. Losing it is not fatal; it says so.
      */
     refresh_count_init();
+
+    /*
+     * Settings next, and before everything else: the timezone is one of them,
+     * and three more go into the forecast URL. Anything started ahead of this
+     * would be running on the flashed value rather than the stored one.
+     */
+    settings_init();
 
     /*
      * Panel bring-up next: it does not need the network, and a wrong pin map or

@@ -8,6 +8,7 @@
 
 #include "esp_timer.h"
 #include "refresh_count.h"
+#include "settings.h"
 #include "wifi_sta.h"
 
 /* ---- Compile-time parameters (platformio.ini -> build_flags) ------------- */
@@ -50,7 +51,7 @@
 static void format_api_key(char *out, size_t n)
 {
 #if STATUS_MASK_API_KEY
-    const char *key = OWM_API_KEY;
+    const char *key = settings_get(SETTING_API_KEY);
     const size_t len = strlen(key);
 
     if (len <= 8) {
@@ -59,7 +60,7 @@ static void format_api_key(char *out, size_t n)
         snprintf(out, n, "%.4s...%s", key, key + len - 4);
     }
 #else
-    snprintf(out, n, "%s", OWM_API_KEY);
+    snprintf(out, n, "%s", settings_get(SETTING_API_KEY));
 #endif
 }
 
@@ -72,9 +73,10 @@ void diagnostics_gather(diag_t *out)
     wifi_sta_format_mac(out->mac, sizeof(out->mac));
     format_api_key(out->api_key, sizeof(out->api_key));
 
-    out->timezone = TIME_ZONE;
-    out->latitude = OWM_LATITUDE;
-    out->longitude = OWM_LONGITUDE;
+    /* The live values, not the built-in ones: these can be changed over MQTT. */
+    out->timezone = settings_get(SETTING_TIMEZONE);
+    out->latitude = settings_get(SETTING_LATITUDE);
+    out->longitude = settings_get(SETTING_LONGITUDE);
 
     out->refreshes = refresh_count_get();
     out->uptime_min = (uint32_t)(esp_timer_get_time() / 60000000);

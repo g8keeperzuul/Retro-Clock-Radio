@@ -118,7 +118,7 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `WIFI_CONNECT_BACKOFF_MAX_MS` | `30000` | Backoff ceiling |
 | `BOOT_LOG_DELAY_MS` | `5000` | Silent pause before the first log line |
 | `NTP_SERVER` | `pool.ntp.org` | NTP server used to set the clock |
-| `TIME_ZONE` | `EST5EDT,M3.2.0,M11.1.0` | Local timezone as a POSIX TZ string |
+| `TIME_ZONE` | `EST5EDT,M3.2.0,M11.1.0` | Local timezone as a POSIX TZ string; **settable at runtime** |
 | `NTP_SYNC_TIMEOUT_MS` | `30000` | Wait for the first NTP response before continuing |
 | `NTP_SYNC_INTERVAL_MS` | `3600000` | Interval between background re-syncs |
 | `EPD_PIN_SCLK` | `12` | Panel CLK |
@@ -155,16 +155,16 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `MQTT_USERNAME` | `""` | Empty for an anonymous broker |
 | `MQTT_PASSWORD` | `""` | Secret; lives in the ignored `platformio.ini` |
 | `MQTT_DIAGNOSTIC_TOPIC` | *(required)* | Topic the JSON is published to |
-| `MQTT_PUBLISH_INTERVAL_S` | `10` | Seconds between publishes |
+| `MQTT_PUBLISH_INTERVAL_S` | `300` | Seconds between publishes; **settable at runtime** |
 | `MQTT_QOS` | `0` | |
-| `MQTT_RETAIN` | `1` | Late subscribers get the last reading at once |
-| `MQTT_PUBLISH_API_KEY` | `1` | 0 = omit the key from the payload only |
+| `MQTT_RETAIN` | `0` | Retain the diagnostics payload; availability and `get` are always retained |
+| `MQTT_PUBLISH_API_KEY` | `0` | 1 = the key in the payload and on its `get` topic |
 | `MQTT_AVAILABILITY_TOPIC` | `homeassistant/sensor/<WIFI_HOSTNAME>/availability` | Where online/offline goes |
 | `MQTT_KEEPALIVE_S` | `30` | How fast the broker notices a dead device |
-| `OWM_API_KEY` | *(required)* | OpenWeather API key |
+| `OWM_API_KEY` | *(required)* | OpenWeather API key; **settable at runtime** |
 | `OWM_FORECAST_PATH` | `/data/2.5/forecast` | Endpoint; `/data/4.0/onecall` requires a credit card on file |
-| `OWM_LATITUDE` | *(required)* | Latitude to forecast for, decimal degrees, quoted |
-| `OWM_LONGITUDE` | *(required)* | Longitude, decimal degrees, quoted |
+| `OWM_LATITUDE` | *(required)* | Latitude to forecast for, decimal degrees, quoted; **settable at runtime** |
+| `OWM_LONGITUDE` | *(required)* | Longitude, decimal degrees, quoted; **settable at runtime** |
 | `OWM_UNITS` | `metric` | `standard`, `metric` or `imperial` |
 | `OWM_UNITS_ENUM` | `WX_UNITS_METRIC` | The same choice for the code, which cannot compare strings |
 | `OWM_POLL_INTERVAL_S` | `1800` | Seconds between fetches; 1800 is 48 calls a day |
@@ -205,6 +205,7 @@ the ring of screens.
 - [src/epd_forecast.c](src/epd_forecast.c) — the two-day forecast screen
 - [src/epd_status.c](src/epd_status.c) — the diagnostics screen
 - [src/diagnostics.c](src/diagnostics.c) — the fields both the screen and MQTT report
+- [src/settings.c](src/settings.c) — build flags that can be overridden at runtime
 - [src/mqtt_report.c](src/mqtt_report.c) — diagnostics published as JSON
 - [src/weather_daily.c](src/weather_daily.c) — three-hourly samples reduced to a day apiece
 - [src/weather_aggregate.c](src/weather_aggregate.c) — hourly forecast into four parts of a day
@@ -499,7 +500,36 @@ legible on the glass after the radio is unplugged, and survives into any
 photograph of the device. `STATUS_MASK_API_KEY=1` prints the first and last four
 characters instead, which is still enough to tell two keys apart.
 
-## MQTT diagnostics
+## MQTT
+Twelve topics, all under `homeassistant/`, with `retro-clock-radio` throughout
+coming from `WIFI_HOSTNAME`. **D→B** is published by the device, **B→D** is
+subscribed to by it, and **broker** is published by the broker on the device's
+behalf.
+
+| Topic | Dir | Retained | Payload |
+|---|:--:|:--:|---|
+| `homeassistant/sensor/retro-clock-radio/diagnostics` | D→B | per `MQTT_RETAIN` | JSON, every `MQTT_PUBLISH_INTERVAL_S` |
+| `homeassistant/sensor/retro-clock-radio/availability` | D→B | yes | `online`, on every connect |
+| `homeassistant/sensor/retro-clock-radio/availability` | broker | yes | `offline`, as the last will |
+| `homeassistant/number/retro-clock-radio/OWM_LATITUDE/get` | D→B | yes | e.g. `43.9` |
+| `homeassistant/number/retro-clock-radio/OWM_LATITUDE/set` | B→D | — | a decimal, −90 to 90 |
+| `homeassistant/number/retro-clock-radio/OWM_LONGITUDE/get` | D→B | yes | e.g. `-79.3` |
+| `homeassistant/number/retro-clock-radio/OWM_LONGITUDE/set` | B→D | — | a decimal, −180 to 180 |
+| `homeassistant/text/retro-clock-radio/TIME_ZONE/get` | D→B | yes | e.g. `EST5EDT,M3.2.0,M11.1.0` |
+| `homeassistant/text/retro-clock-radio/TIME_ZONE/set` | B→D | — | POSIX TZ, 3–63 printable, no spaces |
+| `homeassistant/text/retro-clock-radio/OWM_API_KEY/get` | D→B | yes | masked unless `MQTT_PUBLISH_API_KEY=1` |
+| `homeassistant/text/retro-clock-radio/OWM_API_KEY/set` | B→D | — | 16–63 printable, no spaces |
+| `homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/get` | D→B | yes | e.g. `300` |
+| `homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/set` | B→D | — | whole seconds, 5 to 86400 |
+
+Watch the lot:
+
+```sh
+mosquitto_sub -h 10.0.0.200 -u mqtt-user -P ... -v \
+    -t 'homeassistant/+/retro-clock-radio/#'
+```
+
+### Diagnostics
 The status screen's fields, plus the Wi-Fi signal strength, published as a JSON
 object every `MQTT_PUBLISH_INTERVAL_S`:
 
@@ -558,24 +588,87 @@ Two things about last wills that are easy to be caught by:
   client checks in every 15, and the broker gives up within about 45. The cost
   is a couple of two-byte packets a minute.
 
-### It is a state topic, not a discovery topic
-`homeassistant/sensor/retro-clock-radio/diagnostics` sits under Home Assistant's
-discovery prefix but is **not** a discovery message — HA looks for `.../config`
-there and will not create an entity from this on its own. Point an `mqtt` sensor
-at the topic, or publish a discovery payload separately. Worth knowing before
-wondering why nothing appeared.
+### Changing parameters over MQTT
+Five build flags can be changed without a reflash, each with a `get` topic the
+device publishes to and a `set` topic it listens on:
 
-Messages are retained by default, so a subscriber that connects late gets the
-last reading rather than waiting out an interval.
+```
+homeassistant/<number|text|switch>/<WIFI_HOSTNAME>/<PARAM>/<get|set>
+```
 
-### The API key goes over the wire
-It is in the payload by default, because the ask was for the same information
-the status screen carries. This is a wider exposure than the panel, though, and
-the difference is worth a thought: port 1883 is **plaintext on the wire**, a
-retained message sits on the broker until something replaces it, and a Home
-Assistant that ingests this will file it in its recorder database and show it in
-history. `MQTT_PUBLISH_API_KEY=0` drops the field from the payload while leaving
-it on the glass; `STATUS_MASK_API_KEY=1` shortens it in both.
+The component in the second position follows the parameter's type — `number`
+for the numeric ones, `text` for the alphanumeric. `switch` is in the scheme
+for a boolean, of which there are none yet; adding one is a line in `TABLE[]`
+in [settings.c](src/settings.c) and the topic falls out of it.
+
+```sh
+mosquitto_pub -t homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/set -m 30
+mosquitto_sub -t homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/get
+# 30
+```
+
+Every `get` topic is **retained**, so a subscriber connecting later is told the
+current value without asking. A `set` is answered by republishing the `get`
+whether or not it was accepted — a rejected value leaves the sender believing
+something untrue, and republishing is the only acknowledgement this protocol
+has. An **empty payload resets** a parameter to its compile-time default, which
+is also what clearing a retained `set` topic looks like, so the two agree.
+
+Overrides live in NVS beside the refresh counter, which means they **survive a
+reflash as well as a reboot**. That is the point, and it is also the thing to
+remember when a changed build flag appears to do nothing: the stored value wins
+until it is reset.
+
+### Taking effect instantly
+Storing a value is the easy half. Each parameter also has to reach whatever was
+already using it:
+
+- **`TIME_ZONE`** is applied with `setenv`/`tzset` inside `settings_set()`, so
+  every later call to `localtime_r` is already right.
+- **`OWM_LATITUDE`, `OWM_LONGITUDE`, `OWM_API_KEY`** go into the forecast URL,
+  which stopped being a compile-time concatenation and is now built per fetch.
+  Moving the coordinates also wakes the polling task: a new location is no use
+  if the glass stays half an hour behind the move. The call budget still
+  applies, which is what stops that being abusable.
+- **`MQTT_PUBLISH_INTERVAL_S`** is read each pass of the publishing loop, and
+  the loop sleeps on a notification rather than a plain delay so a change cuts
+  the current sleep short. Going from an hour to ten seconds is otherwise the
+  difference between "instantly" and "in an hour".
+- **The screens** that show these values are marked stale, so they redraw
+  through the usual path — which means the panel's 180-second floor still
+  applies and a flurry of changes still costs one refresh.
+
+### These are state topics, not discovery topics
+Everything here sits under Home Assistant's `homeassistant/` prefix, and none of
+it is a discovery message — HA looks for `.../config` there and will not create
+an entity from any of these on its own. Point `mqtt` sensor, number and text
+entities at the topics, or publish discovery payloads separately. Worth knowing
+before wondering why nothing appeared.
+
+### Where the API key ends up
+One switch, `MQTT_PUBLISH_API_KEY`, governs both places the key could leave the
+device. It is **0** in this build, so:
+
+| | With `0` (this build) | With `1` |
+|---|---|---|
+| `diagnostics` payload | field omitted | the key |
+| `OWM_API_KEY/get` | `6f1e...8a7b` | the key |
+| `OWM_API_KEY/set` | works | works |
+
+Setting it still works either way — reading and writing are separate concerns,
+and it is only the reading that broadcasts. `STATUS_MASK_API_KEY=1` shortens the
+key on the status screen as well.
+
+The reason for the care: port 1883 is **plaintext on the wire**, a retained
+topic holds its value until something replaces it, and a Home Assistant that
+ingests a payload files it in the recorder database and shows it in history. A
+get topic that said nothing at all would be worse than a masked one, which is
+why `0` masks rather than omits there.
+
+And the shape of the feature as a whole, plainly: anyone who can publish to this
+broker can change where the device thinks it is, which key it bills against, and
+what time it believes it is. That is what was asked for. The broker's own
+authentication is the only thing standing in front of it.
 
 ## Weather
 

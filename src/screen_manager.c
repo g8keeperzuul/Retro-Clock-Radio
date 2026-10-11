@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "refresh_gauge.h"
+#include "settings.h"
 #include "weather_display.h"
 
 static const char *TAG = "screen";
@@ -527,6 +528,21 @@ static void screen_task(void *arg)
     }
 }
 
+/*
+ * A parameter has moved, so whatever was drawn using it is out of date. The
+ * status screen shows all five; the clock shows the timezone by way of the
+ * hands. Marking them stale rather than redrawing goes through the same path
+ * as any other content change, which means the panel's floor still applies.
+ */
+static void on_setting_changed(setting_id_t id)
+{
+    screen_manager_content_changed(SCREEN_STATUS);
+
+    if (id == SETTING_TIMEZONE) {
+        screen_manager_content_changed(SCREEN_CLOCK);
+    }
+}
+
 esp_err_t screen_manager_start(screen_id_t initial)
 {
     s_active = (initial < SCREEN_COUNT) ? initial : SCREEN_CLOCK;
@@ -538,6 +554,8 @@ esp_err_t screen_manager_start(screen_id_t initial)
     if (xTaskCreate(screen_task, "screen", TASK_STACK, NULL, TASK_PRIO, &s_task) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
+
+    settings_subscribe(on_setting_changed);
 
     xTaskNotifyGive(s_task);    /* s_drawn is false, so this draws immediately */
 

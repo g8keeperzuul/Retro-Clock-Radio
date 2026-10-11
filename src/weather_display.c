@@ -15,6 +15,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "screen_manager.h"
+#include "settings.h"
 #include "time_sync.h"
 #include "weather_aggregate.h"
 #include "weather_api.h"
@@ -48,6 +49,8 @@ static const char *TAG = "wx-display";
  * copy it out while this one is writing a new one in. Held only long enough to
  * copy the struct, never across a fetch or a refresh.
  */
+static TaskHandle_t s_task;
+
 static wx_report_t s_report;
 
 /*
@@ -239,7 +242,25 @@ static void weather_display_task(void *arg)
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS((got ? OWM_POLL_INTERVAL_S : RETRY_INTERVAL_S) * 1000));
+        /*
+         * A notification cuts the wait short. Moving the coordinates or the
+         * key is pointless if the forecast on the glass stays half an hour
+         * behind the move, so a change fetches again straight away -- subject
+         * to the call budget, which is what stops that being abusable.
+         */
+        ulTaskNotifyTake(pdTRUE,
+                         pdMS_TO_TICKS((got ? OWM_POLL_INTERVAL_S : RETRY_INTERVAL_S) * 1000));
+    }
+}
+
+/* Where the forecast comes from has moved; go and get it again. */
+static void on_setting_changed(setting_id_t id)
+{
+    if (s_task == NULL) {
+        return;
+    }
+    if (id == SETTING_LATITUDE || id == SETTING_LONGITUDE || id == SETTING_API_KEY) {
+        xTaskNotifyGive(s_task);
     }
 }
 
@@ -254,12 +275,14 @@ esp_err_t weather_display_start(void)
     }
 
     const BaseType_t ok = xTaskCreate(weather_display_task, "wx-display", TASK_STACK,
-                                      NULL, TASK_PRIO, NULL);
+                                      NULL, TASK_PRIO, &s_task);
     if (ok != pdPASS) {
         vSemaphoreDelete(s_report_lock);
         s_report_lock = NULL;
         return ESP_ERR_NO_MEM;
     }
+
+    settings_subscribe(on_setting_changed);
 
     ESP_LOGI(TAG, "polling every %d s", OWM_POLL_INTERVAL_S);
     return ESP_OK;
