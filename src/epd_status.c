@@ -8,6 +8,7 @@
 
 #include "diagnostics.h"
 #include "epd_paint.h"
+#include "settings.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -26,14 +27,23 @@ static const char *TAG = "epd-status";
 #ifndef MQTT_ENABLED
 #define MQTT_ENABLED 0
 #endif
+
+#if MQTT_ENABLED
+/*
+ * No "--" fallbacks here. These two were silently defaulting to "--" after
+ * MQTT_TOPIC was renamed MQTT_DIAGNOSTIC_TOPIC, so the screen cheerfully
+ * reported a topic the device does not use. A missing flag should break the
+ * build, the way it does in mqtt_report.c, rather than print something false.
+ *
+ * The publish interval is deliberately absent: it is settable at runtime, so
+ * it has to be read from settings.h and not from the flag it started as.
+ */
 #ifndef MQTT_BROKER_URI
-#define MQTT_BROKER_URI "--"
+#error "MQTT_BROKER_URI is not defined but MQTT_ENABLED is set"
 #endif
-#ifndef MQTT_TOPIC
-#define MQTT_TOPIC "--"
+#ifndef MQTT_DIAGNOSTIC_TOPIC
+#error "MQTT_DIAGNOSTIC_TOPIC is not defined but MQTT_ENABLED is set"
 #endif
-#ifndef MQTT_PUBLISH_INTERVAL_S
-#define MQTT_PUBLISH_INTERVAL_S 10
 #endif
 
 #define VIEW_W EPD_USABLE_WIDTH    /* 478 */
@@ -120,7 +130,8 @@ static void draw_status(uint8_t *fb)
 
 #if MQTT_ENABLED
     char every[16];
-    snprintf(every, sizeof(every), "%d S", MQTT_PUBLISH_INTERVAL_S);
+    snprintf(every, sizeof(every), "%ld S",
+             (long)settings_get_int(SETTING_MQTT_INTERVAL));
 #endif
 
     paint_clear(fb, EPD_WHITE);
@@ -143,7 +154,7 @@ static void draw_status(uint8_t *fb)
     const char *values[] = {
         d.ssid, d.ip, d.mac, d.timezone, latlng, d.api_key,
 #if MQTT_ENABLED
-        MQTT_BROKER_URI, MQTT_TOPIC, every,
+        MQTT_BROKER_URI, MQTT_DIAGNOSTIC_TOPIC, every,
 #endif
         refreshes, uptime,
     };

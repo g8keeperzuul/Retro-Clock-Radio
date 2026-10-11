@@ -4,6 +4,7 @@
 #include <string.h>
 #include "epd_paint.h"
 #include "epd_status.h"
+#include "settings.h"
 #include "refresh_count.h"
 #include "wifi_sta.h"
 
@@ -25,6 +26,15 @@ int main(int argc, char **argv)
 {
     static const unsigned char RGB[4][3] = {
         {0,0,0},{255,255,255},{230,200,40},{200,40,40} };
+    settings_init();
+
+    /* Pretend an MQTT setter has been along, so the render shows live values
+     * rather than the flags the firmware was built with. */
+    if (getenv("SET_TZ"))       settings_set(SETTING_TIMEZONE, getenv("SET_TZ"));
+    if (getenv("SET_LAT"))      settings_set(SETTING_LATITUDE, getenv("SET_LAT"));
+    if (getenv("SET_LON"))      settings_set(SETTING_LONGITUDE, getenv("SET_LON"));
+    if (getenv("SET_INTERVAL")) settings_set(SETTING_MQTT_INTERVAL, getenv("SET_INTERVAL"));
+
     epd_status_show();
     FILE *f = fopen(argv[1], "wb");
     fprintf(f, "P6\n%d %d\n255\n", EPD_USABLE_WIDTH, EPD_USABLE_HEIGHT);

@@ -457,7 +457,10 @@ from efuse, so it is printable before the radio has ever come up.
 
 The three MQTT rows are compiled in and out with the client, so a build with
 `MQTT_ENABLED=0` does not carry three lines about a broker it will never talk
-to. The broker URI is printed as configured — worth remembering that a URI of
+to. Where a field is one of the [runtime-settable
+parameters](#changing-parameters-over-mqtt), the screen shows the **live**
+value, not the one the firmware was flashed with — which is the point of having
+it on a diagnostics screen at all. The broker URI is printed as configured — worth remembering that a URI of
 the form `mqtt://user:pass@host` would put those credentials on the glass, and
 that e-paper keeps its last image with no power at all.
 
@@ -601,10 +604,17 @@ for the numeric ones, `text` for the alphanumeric. `switch` is in the scheme
 for a boolean, of which there are none yet; adding one is a line in `TABLE[]`
 in [settings.c](src/settings.c) and the topic falls out of it.
 
+Update a parameter:
 ```sh
-mosquitto_pub -t homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/set -m 30
-mosquitto_sub -t homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/get
-# 30
+mosquitto_pub -h 10.0.0.200 -p 1883 -u mqtt-user -P ...  \
+    -t 'homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/set' -m 600
+```
+
+Read a parameter:
+```sh
+mosquitto_sub -h 10.0.0.200 -p 1883 -u mqtt-user -P ...  \
+    -t 'homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/get'
+# 600
 ```
 
 Every `get` topic is **retained**, so a subscriber connecting later is told the
