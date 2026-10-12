@@ -536,6 +536,15 @@ static void screen_task(void *arg)
  */
 static void on_setting_changed(setting_id_t id)
 {
+    /*
+     * A boot setting has been written down but nothing is using it yet, and
+     * the status screen shows what is in use. Redrawing would cost a
+     * twenty-five second refresh to change nothing.
+     */
+    if (settings_takes_effect_on_reboot(id)) {
+        return;
+    }
+
     screen_manager_content_changed(SCREEN_STATUS);
 
     if (id == SETTING_TIMEZONE) {

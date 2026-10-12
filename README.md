@@ -504,26 +504,39 @@ photograph of the device. `STATUS_MASK_API_KEY=1` prints the first and last four
 characters instead, which is still enough to tell two keys apart.
 
 ## MQTT
-Twelve topics, all under `homeassistant/`, with `retro-clock-radio` throughout
+Twenty-two topics, all under `homeassistant/`, with `retro-clock-radio` throughout
 coming from `WIFI_HOSTNAME`. **D→B** is published by the device, **B→D** is
 subscribed to by it, and **broker** is published by the broker on the device's
 behalf.
 
-| Topic | Dir | Retained | Payload |
-|---|:--:|:--:|---|
-| `homeassistant/sensor/retro-clock-radio/diagnostics` | D→B | per `MQTT_RETAIN` | JSON, every `MQTT_PUBLISH_INTERVAL_S` |
-| `homeassistant/sensor/retro-clock-radio/availability` | D→B | yes | `online`, on every connect |
-| `homeassistant/sensor/retro-clock-radio/availability` | broker | yes | `offline`, as the last will |
-| `homeassistant/number/retro-clock-radio/OWM_LATITUDE/get` | D→B | yes | e.g. `43.9` |
-| `homeassistant/number/retro-clock-radio/OWM_LATITUDE/set` | B→D | — | a decimal, −90 to 90 |
-| `homeassistant/number/retro-clock-radio/OWM_LONGITUDE/get` | D→B | yes | e.g. `-79.3` |
-| `homeassistant/number/retro-clock-radio/OWM_LONGITUDE/set` | B→D | — | a decimal, −180 to 180 |
-| `homeassistant/text/retro-clock-radio/TIME_ZONE/get` | D→B | yes | e.g. `EST5EDT,M3.2.0,M11.1.0` |
-| `homeassistant/text/retro-clock-radio/TIME_ZONE/set` | B→D | — | POSIX TZ, 3–63 printable, no spaces |
-| `homeassistant/text/retro-clock-radio/OWM_API_KEY/get` | D→B | yes | masked unless `MQTT_PUBLISH_API_KEY=1` |
-| `homeassistant/text/retro-clock-radio/OWM_API_KEY/set` | B→D | — | 16–63 printable, no spaces |
-| `homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/get` | D→B | yes | e.g. `300` |
-| `homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/set` | B→D | — | whole seconds, 5 to 86400 |
+| Topic | Dir | Retained | Effect | Payload |
+|---|:--:|:--:|:--:|---|
+| `homeassistant/sensor/retro-clock-radio/diagnostics` | D→B | per `MQTT_RETAIN` | n/a | JSON, every `MQTT_PUBLISH_INTERVAL_S` |
+| `homeassistant/sensor/retro-clock-radio/availability` | D→B | yes | n/a | `online`, on every connect |
+| `homeassistant/sensor/retro-clock-radio/availability` | broker | yes | n/a | `offline`, as the last will |
+| `homeassistant/number/retro-clock-radio/OWM_LATITUDE/get` | D→B | yes | current | e.g. `43.9` |
+| `homeassistant/number/retro-clock-radio/OWM_LATITUDE/set` | B→D | — | immediate | a decimal, −90 to 90 |
+| `homeassistant/number/retro-clock-radio/OWM_LONGITUDE/get` | D→B | yes | current | e.g. `-79.3` |
+| `homeassistant/number/retro-clock-radio/OWM_LONGITUDE/set` | B→D | — | immediate | a decimal, −180 to 180 |
+| `homeassistant/text/retro-clock-radio/TIME_ZONE/get` | D→B | yes | current | e.g. `EST5EDT,M3.2.0,M11.1.0` |
+| `homeassistant/text/retro-clock-radio/TIME_ZONE/set` | B→D | — | immediate | POSIX TZ, 3–63 printable, no spaces |
+| `homeassistant/text/retro-clock-radio/OWM_API_KEY/get` | D→B | yes | current | masked unless `MQTT_PUBLISH_API_KEY=1` |
+| `homeassistant/text/retro-clock-radio/OWM_API_KEY/set` | B→D | — | immediate | 16–63 printable, no spaces |
+| `homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/get` | D→B | yes | current | e.g. `300` |
+| `homeassistant/number/retro-clock-radio/MQTT_PUBLISH_INTERVAL_S/set` | B→D | — | immediate | whole seconds, 5 to 86400 |
+| `homeassistant/text/retro-clock-radio/WIFI_SSID/get` | D→B | yes | returns any override value only | the override, or empty |
+| `homeassistant/text/retro-clock-radio/WIFI_SSID/set` | B→D | — | after reboot | 1–32 printable |
+| `homeassistant/text/retro-clock-radio/WIFI_PASSWORD/get` | D→B | yes | returns any override value only | the override, or empty |
+| `homeassistant/text/retro-clock-radio/WIFI_PASSWORD/set` | B→D | — | after reboot | 8–63 printable (WPA2) |
+| `homeassistant/text/retro-clock-radio/MQTT_BROKER_URI/get` | D→B | yes | returns any override value only | the override, or empty |
+| `homeassistant/text/retro-clock-radio/MQTT_BROKER_URI/set` | B→D | — | after reboot | `mqtt://`, `mqtts://`, `ws://` or `wss://` + host |
+| `homeassistant/text/retro-clock-radio/MQTT_USERNAME/get` | D→B | yes | returns any override value only | the override, or empty |
+| `homeassistant/text/retro-clock-radio/MQTT_USERNAME/set` | B→D | — | after reboot | 1–63 printable |
+| `homeassistant/text/retro-clock-radio/MQTT_PASSWORD/get` | D→B | yes | returns any override value only | the override, or empty |
+| `homeassistant/text/retro-clock-radio/MQTT_PASSWORD/set` | B→D | — | after reboot | 1–63 printable |
+
+Note that some parameters are set in non-volatile memory and are only effective after device reboot. 
+The status display will show the current value (which may be different from the stored value). This stored value only becomes the current value after reboot. 
 
 Watch the lot:
 
@@ -592,7 +605,7 @@ Two things about last wills that are easy to be caught by:
   is a couple of two-byte packets a minute.
 
 ### Changing parameters over MQTT
-Five build flags can be changed without a reflash, each with a `get` topic the
+Ten build flags can be changed without a reflash, each with a `get` topic the
 device publishes to and a `set` topic it listens on:
 
 ```
@@ -628,6 +641,60 @@ Overrides live in NVS beside the refresh counter, which means they **survive a
 reflash as well as a reboot**. That is the point, and it is also the thing to
 remember when a changed build flag appears to do nothing: the stored value wins
 until it is reset.
+
+### Two kinds of parameter
+The five above are **live**: a new value is adopted as it arrives. Five more are
+**boot settings** — `WIFI_SSID`, `WIFI_PASSWORD`, `MQTT_BROKER_URI`,
+`MQTT_USERNAME`, `MQTT_PASSWORD` — and those are only written down. They are
+picked up at the next start.
+
+That is not laziness. They are how the radio reaches the network and the broker
+in the first place, so applying one live would mean tearing down the connection
+the instruction arrived on. The useful consequence is that **"in use" and
+"stored" are two different things for the length of an uptime**, and the get
+topic answers the second:
+
+| | `settings_get()` — in use | `settings_reported()` — the get topic |
+|---|---|---|
+| fresh flash | the build flag | *(empty)* |
+| after `SSID/set = B` | still A | B |
+| after a restart | B | B |
+| after `SSID/set = ""` | still B | *(empty)* |
+| after a restart | the build flag | *(empty)* |
+
+An **empty get topic means "not overridden"** — this one is still on whatever
+was flashed. Because it is published as a zero-length retained message, the
+retention is cleared too, so nothing really is nothing.
+
+The status screen deliberately shows the **in-use** values, so after setting a
+new SSID the screen and the getter will disagree until the radio restarts. That
+is the design, not a bug.
+
+The `WIFI_PASSWORD` and `MQTT_PASSWORD` get topics are **unmasked**. They are
+only ever non-empty when someone set them over this same broker, so masking
+would hide a value from the one party already known to have it. `OWM_API_KEY` is
+different — it comes from the firmware, so it can leak something the broker was
+never told, and it follows `MQTT_PUBLISH_API_KEY`.
+
+### Locking yourself out
+Setting `WIFI_SSID` or `WIFI_PASSWORD` to something wrong gives you a radio that
+reboots, fails to join, and **cannot be told so over MQTT** — the only channel
+for fixing it needs the network it can no longer reach. The broker URI has the
+same shape of risk.
+
+Validation covers the obvious slips: a URI must carry a scheme esp-mqtt knows
+plus a host, an SSID must be 1–32 characters, a passphrase 8–63. It cannot
+check that a network exists or that a password is right.
+
+Recovery is physical:
+
+```sh
+pio run -t erase       # wipes NVS, so every override goes with it
+pio run -t upload
+```
+
+Note that erasing takes the refresh counter with it, which is the one piece of
+state in there meant to outlive everything.
 
 ### Taking effect instantly
 Storing a value is the easy half. Each parameter also has to reach whatever was

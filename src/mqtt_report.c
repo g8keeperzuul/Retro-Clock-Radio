@@ -145,13 +145,19 @@ static void publish_param(setting_id_t id)
     char topic[TOPIC_MAX];
     param_topic(topic, sizeof(topic), id, "get");
 
-    const char *value = settings_get(id);
+    /*
+     * settings_reported(), not settings_get(): for a boot setting these differ
+     * for the whole of an uptime, and the get topic is meant to answer "what
+     * will this be after a restart", not "what is it now".
+     */
+    const char *value = settings_reported(id);
 
 #if !MQTT_PUBLISH_API_KEY
     /*
-     * The key is the one parameter whose value is a secret. With the switch
-     * off it is still reported -- a get topic that said nothing would be
-     * worse -- but only enough of it to tell one key from another.
+     * The OpenWeather key is masked when the switch is off. The Wi-Fi and
+     * broker passwords are not, and deliberately so: they are only ever
+     * reported when someone has set them over this same broker, so masking
+     * would hide a value from the one party already known to have it.
      */
     char masked[24];
     if (id == SETTING_API_KEY) {
@@ -203,12 +209,12 @@ static void on_set_message(const char *topic, int topic_len, const char *data,
         value[data_len] = '\0';
 
         /*
-         * An empty payload means "go back to the built-in value". It is the
-         * natural reading, and it is also how a retained set topic is cleared,
-         * so the two agree rather than fighting.
+         * An empty payload means "go back to the built-in value" -- the natural
+         * reading, and also what clearing a retained set topic looks like, so
+         * the two agree rather than fighting. settings_set() knows that rule;
+         * there is no need for a second copy of it here.
          */
-        const esp_err_t err = (data_len == 0) ? settings_reset((setting_id_t)id)
-                                              : settings_set((setting_id_t)id, value);
+        const esp_err_t err = settings_set((setting_id_t)id, value);
 
         if (err != ESP_OK) {
             /*
@@ -387,10 +393,17 @@ static void mqtt_report_task(void *arg)
 esp_err_t mqtt_report_start(void)
 {
     const esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = MQTT_BROKER_URI,
+        /*
+         * The effective values. A set made while this is running is written
+         * down but not used -- tearing down the connection a change arrived on
+         * in order to apply it is not a sequence worth having.
+         */
+        .broker.address.uri = settings_get(SETTING_MQTT_BROKER_URI),
         .credentials = {
-            .username = (MQTT_USERNAME[0] != '\0') ? MQTT_USERNAME : NULL,
-            .authentication.password = (MQTT_PASSWORD[0] != '\0') ? MQTT_PASSWORD : NULL,
+            .username = (settings_get(SETTING_MQTT_USERNAME)[0] != '\0')
+                            ? settings_get(SETTING_MQTT_USERNAME) : NULL,
+            .authentication.password = (settings_get(SETTING_MQTT_PASSWORD)[0] != '\0')
+                            ? settings_get(SETTING_MQTT_PASSWORD) : NULL,
         },
         .session = {
             /*

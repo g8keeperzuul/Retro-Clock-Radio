@@ -13,6 +13,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "settings.h"
 
 /* ---- Compile-time parameters (platformio.ini -> build_flags) ------------- */
 
@@ -82,7 +83,8 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         const wifi_event_sta_disconnected_t *ev = data;
         s_last_reason = ev->reason;
         s_connected = false;
-        ESP_LOGW(TAG, "disconnected from \"%s\" (reason %u)", WIFI_SSID, ev->reason);
+        ESP_LOGW(TAG, "disconnected from \"%s\" (reason %u)",
+                 settings_get(SETTING_WIFI_SSID), ev->reason);
         xEventGroupClearBits(s_events, WIFI_EVT_GOT_IP);
         xEventGroupSetBits(s_events, WIFI_EVT_DISCONNECT);
         if (s_auto_reconnect) {
@@ -186,8 +188,14 @@ esp_err_t wifi_sta_init(void)
         },
     };
     /* strncpy over fixed-size, non-NUL-terminated driver fields. */
-    strncpy((char *)sta_cfg.sta.ssid, WIFI_SSID, sizeof(sta_cfg.sta.ssid));
-    strncpy((char *)sta_cfg.sta.password, WIFI_PASSWORD, sizeof(sta_cfg.sta.password));
+    /*
+     * The effective credentials, which are the stored ones when a set has been
+     * made and the radio restarted since, and the built-in ones otherwise.
+     */
+    strncpy((char *)sta_cfg.sta.ssid, settings_get(SETTING_WIFI_SSID),
+            sizeof(sta_cfg.sta.ssid));
+    strncpy((char *)sta_cfg.sta.password, settings_get(SETTING_WIFI_PASSWORD),
+            sizeof(sta_cfg.sta.password));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
 
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -209,7 +217,8 @@ esp_err_t wifi_sta_connect(void)
     uint32_t backoff_ms = WIFI_CONNECT_BACKOFF_MIN_MS;
 
     for (uint32_t attempt = 1; max_attempts == 0 || attempt <= max_attempts; attempt++) {
-        ESP_LOGI(TAG, "connecting to \"%s\" (attempt %" PRIu32 ")", WIFI_SSID, attempt);
+        ESP_LOGI(TAG, "connecting to \"%s\" (attempt %" PRIu32 ")",
+                 settings_get(SETTING_WIFI_SSID), attempt);
         xEventGroupClearBits(s_events, WIFI_EVT_GOT_IP | WIFI_EVT_DISCONNECT);
 
         esp_err_t err = esp_wifi_connect();
@@ -238,7 +247,8 @@ esp_err_t wifi_sta_connect(void)
         }
     }
 
-    ESP_LOGE(TAG, "giving up on \"%s\" after %" PRIu32 " attempts", WIFI_SSID, max_attempts);
+    ESP_LOGE(TAG, "giving up on \"%s\" after %" PRIu32 " attempts",
+             settings_get(SETTING_WIFI_SSID), max_attempts);
     return ESP_ERR_TIMEOUT;
 }
 

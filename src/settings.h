@@ -23,12 +23,33 @@
 extern "C" {
 #endif
 
+/*
+ * Two kinds, and the difference matters at every call site below.
+ *
+ * The first five are LIVE: a new value is adopted the moment it arrives, and
+ * what is stored is also what is running.
+ *
+ * The rest are BOOT settings -- the credentials and addresses needed to reach
+ * the network and the broker in the first place. Changing one of those under a
+ * running radio would mean tearing down the connection the change arrived on,
+ * so a new value is only written down; it is picked up at the next start. That
+ * makes "the value in use" and "the value stored" two different things for the
+ * length of an uptime, and both are needed: settings_get() answers the first,
+ * settings_reported() the second.
+ */
 typedef enum {
     SETTING_LATITUDE,
     SETTING_LONGITUDE,
     SETTING_TIMEZONE,
     SETTING_API_KEY,
     SETTING_MQTT_INTERVAL,
+
+    SETTING_WIFI_SSID,
+    SETTING_WIFI_PASSWORD,
+    SETTING_MQTT_BROKER_URI,
+    SETTING_MQTT_USERNAME,
+    SETTING_MQTT_PASSWORD,
+
     SETTING_COUNT,
 } setting_id_t;
 
@@ -42,8 +63,28 @@ typedef enum {
  */
 void settings_init(void);
 
-/* The current value. Never NULL, never empty, safe to read from any task. */
+/*
+ * The value in use. Never NULL, never empty, safe to read from any task.
+ *
+ * For a boot setting this is what was loaded at start-up, which is deliberately
+ * not affected by a set made since: the radio is still on that network, still
+ * talking to that broker, and saying otherwise would be a lie.
+ */
 const char *settings_get(setting_id_t id);
+
+/*
+ * What the MQTT get topic should carry, which is not always what is in use.
+ *
+ * For a live setting it is the value, same as settings_get(). For a boot
+ * setting it is the stored override *only* -- empty when there is none, which
+ * is how a subscriber is told "this one is still on its compile-time value".
+ * Published to a retained topic, an empty payload also clears the retention,
+ * so "nothing" survives as nothing.
+ */
+const char *settings_reported(setting_id_t id);
+
+/* Whether a change to this one waits for a restart. */
+bool settings_takes_effect_on_reboot(setting_id_t id);
 
 /* The current value as a whole number. Zero for a parameter that is not one. */
 int32_t settings_get_int(setting_id_t id);

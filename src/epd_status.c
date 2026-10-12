@@ -154,7 +154,9 @@ static void draw_status(uint8_t *fb)
     const char *values[] = {
         d.ssid, d.ip, d.mac, d.timezone, latlng, d.api_key,
 #if MQTT_ENABLED
-        MQTT_BROKER_URI, MQTT_DIAGNOSTIC_TOPIC, every,
+        /* In use, not pending: a broker set over MQTT applies at the next
+         * restart, and until then this is still the one being talked to. */
+        settings_get(SETTING_MQTT_BROKER_URI), MQTT_DIAGNOSTIC_TOPIC, every,
 #endif
         refreshes, uptime,
     };

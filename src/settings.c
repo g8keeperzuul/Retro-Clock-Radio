@@ -34,14 +34,33 @@ static const char *TAG = "settings";
 #define MQTT_PUBLISH_INTERVAL_S 300
 #endif
 
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#endif
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD ""
+#endif
+#ifndef MQTT_BROKER_URI
+#define MQTT_BROKER_URI ""
+#endif
+#ifndef MQTT_USERNAME
+#define MQTT_USERNAME ""
+#endif
+#ifndef MQTT_PASSWORD
+#define MQTT_PASSWORD ""
+#endif
+
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
 
 /* Shares refresh_count.c's namespace; NVS keys must stay under 16 characters. */
 #define SETTINGS_NAMESPACE "clockradio"
 
-/* The longest a value may be, NUL included. A POSIX TZ string is the big one. */
-#define VALUE_MAX 64
+/*
+ * The longest a value may be, NUL included. A broker URI with a hostname sets
+ * this; a WPA passphrase runs to 63 and an SSID to 32.
+ */
+#define VALUE_MAX 128
 
 #define MAX_OBSERVERS 4
 
@@ -123,6 +142,59 @@ static bool valid_api_key(const char *v)
     return true;
 }
 
+/*
+ * Printable, spaces included. Unlike a key or a timezone, an SSID and a
+ * passphrase are allowed spaces and frequently have them, so this is the looser
+ * cousin of the checks above rather than a copy of them.
+ */
+static bool printable_between(const char *v, size_t lo, size_t hi)
+{
+    const size_t len = strlen(v);
+
+    if (len < lo || len > hi || len >= VALUE_MAX) {
+        return false;
+    }
+    for (const char *p = v; *p != '\0'; p++) {
+        if (*p < ' ' || *p > '~') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* 802.11 caps an SSID at 32 octets. */
+static bool valid_ssid(const char *v) { return printable_between(v, 1, 32); }
+
+/*
+ * A WPA2 passphrase is 8 to 63 characters. An open network cannot be expressed
+ * here -- an empty value means "forget the override", which is the more useful
+ * reading of an empty payload and the only one the protocol can carry.
+ */
+static bool valid_wifi_password(const char *v) { return printable_between(v, 8, 63); }
+
+static bool valid_credential(const char *v) { return printable_between(v, 1, 63); }
+
+/*
+ * A scheme esp-mqtt understands, and a host after it. Checked because the
+ * alternative is a device that reboots into a client that can never connect,
+ * and which can then only be told so over the connection it has just lost.
+ */
+static bool valid_broker_uri(const char *v)
+{
+    static const char *SCHEMES[] = {"mqtt://", "mqtts://", "ws://", "wss://"};
+
+    if (!printable_between(v, 8, VALUE_MAX - 1)) {
+        return false;
+    }
+    for (unsigned i = 0; i < sizeof(SCHEMES) / sizeof(SCHEMES[0]); i++) {
+        const size_t n = strlen(SCHEMES[i]);
+        if (strncmp(v, SCHEMES[i], n) == 0 && v[n] != '\0') {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* ---- The table ----------------------------------------------------------- */
 
 /*
@@ -136,6 +208,7 @@ static const struct {
     const char *nvs_key;
     const char *fallback;  /* the compile-time value */
     bool (*valid)(const char *);
+    bool boot_only;        /* stored now, picked up at the next start */
 } TABLE[SETTING_COUNT] = {
     [SETTING_LATITUDE] = {
         "OWM_LATITUDE", "number", "s_lat", OWM_LATITUDE, valid_latitude },
@@ -148,9 +221,32 @@ static const struct {
     [SETTING_MQTT_INTERVAL] = {
         "MQTT_PUBLISH_INTERVAL_S", "number", "s_mqtt_iv",
         STRINGIFY(MQTT_PUBLISH_INTERVAL_S), valid_interval },
+
+    /* Everything below is how the radio reaches the network and the broker,
+     * which is why none of it can be changed under a running connection. */
+    [SETTING_WIFI_SSID] = {
+        "WIFI_SSID", "text", "s_ssid", WIFI_SSID, valid_ssid, true },
+    [SETTING_WIFI_PASSWORD] = {
+        "WIFI_PASSWORD", "text", "s_wpw", WIFI_PASSWORD, valid_wifi_password, true },
+    [SETTING_MQTT_BROKER_URI] = {
+        "MQTT_BROKER_URI", "text", "s_uri", MQTT_BROKER_URI, valid_broker_uri, true },
+    [SETTING_MQTT_USERNAME] = {
+        "MQTT_USERNAME", "text", "s_muser", MQTT_USERNAME, valid_credential, true },
+    [SETTING_MQTT_PASSWORD] = {
+        "MQTT_PASSWORD", "text", "s_mpw", MQTT_PASSWORD, valid_credential, true },
 };
 
+/*
+ * s_value is what is running. s_stored is the override as it sits in NVS, or
+ * empty when there is none.
+ *
+ * For a live setting the two are the same by construction. For a boot setting
+ * they part company the moment one is set and stay parted until a restart --
+ * which is the entire point, and is why the status screen and the MQTT getter
+ * are allowed to disagree about the SSID.
+ */
 static char s_value[SETTING_COUNT][VALUE_MAX];
+static char s_stored[SETTING_COUNT][VALUE_MAX];
 static bool s_overridden[SETTING_COUNT];
 static nvs_handle_t s_nvs;
 static bool s_nvs_open;
@@ -180,6 +276,8 @@ static void apply(setting_id_t id)
         tzset();
     }
 }
+
+static void notify(setting_id_t id);
 
 static void notify(setting_id_t id)
 {
@@ -227,6 +325,7 @@ void settings_init(void)
         }
 
         memcpy(s_value[i], stored, len);
+        memcpy(s_stored[i], stored, len);
         s_overridden[i] = true;
     }
 
@@ -248,6 +347,25 @@ const char *settings_get(setting_id_t id)
     return s_value[id];
 }
 
+const char *settings_reported(setting_id_t id)
+{
+    if (id >= SETTING_COUNT) {
+        return "";
+    }
+
+    /*
+     * A live setting reports what it is. A boot setting reports only what has
+     * been stored over the top of the firmware -- empty when nothing has, which
+     * is the subscriber's cue that this one is still on its compile-time value.
+     */
+    return TABLE[id].boot_only ? s_stored[id] : s_value[id];
+}
+
+bool settings_takes_effect_on_reboot(setting_id_t id)
+{
+    return (id < SETTING_COUNT) && TABLE[id].boot_only;
+}
+
 int32_t settings_get_int(setting_id_t id)
 {
     return (id < SETTING_COUNT) ? (int32_t)strtol(s_value[id], NULL, 10) : 0;
@@ -259,11 +377,15 @@ esp_err_t settings_set(setting_id_t id, const char *value)
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Trailing whitespace is what an MQTT client's echo looks like, not intent. */
+    /*
+     * Strip line endings only. They are a transport artefact -- an MQTT client
+     * echoing a file, say -- whereas a trailing space can be a real character
+     * in a Wi-Fi passphrase, and eating it would make the radio unreachable
+     * for a reason nobody would ever guess.
+     */
     char clean[VALUE_MAX];
     size_t n = strlen(value);
-    while (n > 0 && (value[n - 1] == '\n' || value[n - 1] == '\r' ||
-                     value[n - 1] == ' ' || value[n - 1] == '\t')) {
+    while (n > 0 && (value[n - 1] == '\n' || value[n - 1] == '\r')) {
         n--;
     }
     if (n >= VALUE_MAX) {
@@ -273,16 +395,34 @@ esp_err_t settings_set(setting_id_t id, const char *value)
     memcpy(clean, value, n);
     clean[n] = '\0';
 
+    /*
+     * An empty value means "forget the override". The rule lives here rather
+     * than in the MQTT handler so that every caller gets it: a validator that
+     * rejects the empty string and a caller that treats it as a reset is the
+     * sort of split that works until the second caller arrives.
+     */
+    if (clean[0] == '\0') {
+        return settings_reset(id);
+    }
+
     if (!TABLE[id].valid(clean)) {
         /* Never the value: one of these is the API key. */
         ESP_LOGW(TAG, "%s: rejected a value that did not validate", TABLE[id].name);
         return ESP_ERR_INVALID_ARG;
     }
 
+    const bool boot_only = TABLE[id].boot_only;
+
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    const bool same = (strcmp(s_value[id], clean) == 0);
+    const bool same = (strcmp(s_stored[id], clean) == 0);
     if (!same) {
-        snprintf(s_value[id], VALUE_MAX, "%s", clean);
+        snprintf(s_stored[id], VALUE_MAX, "%s", clean);
+
+        /* A boot setting is written down and left alone; what is running
+         * keeps running until the next start. */
+        if (!boot_only) {
+            snprintf(s_value[id], VALUE_MAX, "%s", clean);
+        }
     }
     xSemaphoreGive(s_lock);
 
@@ -307,7 +447,13 @@ esp_err_t settings_set(setting_id_t id, const char *value)
 
     s_overridden[id] = true;
     apply(id);
-    ESP_LOGI(TAG, "%s updated", TABLE[id].name);
+
+    if (boot_only) {
+        ESP_LOGI(TAG, "%s stored; it takes effect at the next restart",
+                 TABLE[id].name);
+    } else {
+        ESP_LOGI(TAG, "%s updated", TABLE[id].name);
+    }
     notify(id);
 
     return ESP_OK;
@@ -320,7 +466,10 @@ esp_err_t settings_reset(setting_id_t id)
     }
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    snprintf(s_value[id], VALUE_MAX, "%s", TABLE[id].fallback);
+    s_stored[id][0] = '\0';
+    if (!TABLE[id].boot_only) {
+        snprintf(s_value[id], VALUE_MAX, "%s", TABLE[id].fallback);
+    }
     xSemaphoreGive(s_lock);
 
     if (s_nvs_open) {
@@ -330,7 +479,8 @@ esp_err_t settings_reset(setting_id_t id)
 
     s_overridden[id] = false;
     apply(id);
-    ESP_LOGI(TAG, "%s is back on its built-in value", TABLE[id].name);
+    ESP_LOGI(TAG, "%s override cleared; the built-in value is used%s",
+             TABLE[id].name, TABLE[id].boot_only ? " from the next restart" : "");
     notify(id);
 
     return ESP_OK;
