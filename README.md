@@ -171,8 +171,14 @@ The same is true of the single capacitor on the two-pin e-Paper display power co
 
 ### KiCad
 
+![Schematic](./docs/pcb/schematic.png)
+
 [Espressif libraries for KiCad](https://github.com/espressif/kicad-libraries)
-Notice the need for a second layer (see blue traces). These were implemented as patch wires soldered to the board.
+
+[Download KiCad project (ZIP)](./docs/pcb/retro-clock-kicad.zip)
+
+Notice below the need for a second layer (see blue traces). These were implemented as patch wires soldered to the board.
+
 <p float="left">
 <img width="33%" src="./docs/pcb/pcb-layers.png" />
 <img width="33%" src="./docs/pictures/populated-pcb-top-web.jpg" />
