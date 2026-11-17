@@ -767,9 +767,9 @@ behalf.
 | `homeassistant/sensor/retro-clock-radio/diagnostics` | D→B | per `MQTT_RETAIN` | n/a | JSON, every `MQTT_PUBLISH_INTERVAL_S` |
 | `homeassistant/sensor/retro-clock-radio/availability` | D→B | yes | n/a | `online`, on every connect |
 | `homeassistant/sensor/retro-clock-radio/availability` | broker | yes | n/a | `offline`, as the last will |
-| `homeassistant/number/retro-clock-radio/OWM_LATITUDE/get` | D→B | yes | current | e.g. `43.9` |
+| `homeassistant/number/retro-clock-radio/OWM_LATITUDE/get` | D→B | yes | current | e.g. `39.5` |
 | `homeassistant/number/retro-clock-radio/OWM_LATITUDE/set` | B→D | — | immediate | a decimal, −90 to 90 |
-| `homeassistant/number/retro-clock-radio/OWM_LONGITUDE/get` | D→B | yes | current | e.g. `-79.3` |
+| `homeassistant/number/retro-clock-radio/OWM_LONGITUDE/get` | D→B | yes | current | e.g. `-76.2` |
 | `homeassistant/number/retro-clock-radio/OWM_LONGITUDE/set` | B→D | — | immediate | a decimal, −180 to 180 |
 | `homeassistant/text/retro-clock-radio/TIME_ZONE/get` | D→B | yes | current | e.g. `EST5EDT,M3.2.0,M11.1.0` |
 | `homeassistant/text/retro-clock-radio/TIME_ZONE/set` | B→D | — | immediate | POSIX TZ, 3–63 printable, no spaces |
@@ -805,7 +805,7 @@ object every `MQTT_PUBLISH_INTERVAL_S`:
 ```json
 {"ssid":"ETHERCI5","ip":"192.168.137.214","mac":"a0:85:e3:4b:19:7c",
  "rssi":-57,"timezone":"EST5EDT,M3.2.0,M11.1.0",
- "latitude":"43.9","longitude":"-79.3","owm_api_key":"...",
+ "latitude":"39.7","longitude":"-74.2","owm_api_key":"...",
  "screen_refreshes":48217,"uptime_minutes":4584,"uptime":"3d 04h 24m",
  "version":"1.0.0"}
 ```
