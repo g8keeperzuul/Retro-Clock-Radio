@@ -49,12 +49,30 @@ static const char *TAG = "encoder";
 #ifndef ENC_FLASH_MS
 #define ENC_FLASH_MS 150
 #endif
+#ifndef ENC_BUTTON_PIN
+#define ENC_BUTTON_PIN 24        /* the seesaw pin the push switch pulls low */
+#endif
+
+/*
+ * A press closer than this to the last one is the switch bouncing, not a hand.
+ * Polling at 50 ms already hides most bounce; this catches the rest without
+ * being short enough for a deliberate double press to beat.
+ */
+#ifndef ENC_PRESS_GAP_MS
+#define ENC_PRESS_GAP_MS 250
+#endif
 
 /* ---- seesaw register map (Adafruit's firmware, not a hardware datasheet) -- */
 
 #define SEESAW_STATUS_BASE   0x00
 #define SEESAW_STATUS_HW_ID  0x01
 #define SEESAW_STATUS_SWRST  0x7F
+
+#define SEESAW_GPIO_BASE        0x01
+#define SEESAW_GPIO_DIRCLR_BULK 0x03
+#define SEESAW_GPIO_BULK        0x04
+#define SEESAW_GPIO_BULK_SET    0x05
+#define SEESAW_GPIO_PULLENSET   0x0B
 
 #define SEESAW_ENCODER_BASE  0x11
 #define SEESAW_ENCODER_DELTA 0x40
@@ -90,12 +108,17 @@ static const char *TAG = "encoder";
 /* Complain about the first read failure in a run, then every hundredth. */
 #define FAULT_LOG_EVERY 100
 
-#define TASK_STACK 3072
+/*
+ * Not just a poll loop any more: a press can switch the alarm, which runs
+ * settings_set() on this task -- an NVS write and an MQTT publish deep.
+ */
+#define TASK_STACK 4096
 #define TASK_PRIO  5     /* above the display tasks: it must never miss a poll */
 
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
 static rotary_encoder_cb_t s_on_turn;
+static rotary_encoder_press_cb_t s_on_press;
 
 static esp_err_t seesaw_write(uint8_t base, uint8_t reg, const uint8_t *data, size_t n)
 {
@@ -213,6 +236,86 @@ static void flash_expire(void)
     }
 }
 
+/* ---- The push button ---------------------------------------------------- */
+
+/* The GPIO registers take a 32-bit pin mask, most significant byte first. */
+static void pin_mask(uint8_t out[4])
+{
+    const uint32_t m = 1u << ENC_BUTTON_PIN;
+    out[0] = (uint8_t)(m >> 24);
+    out[1] = (uint8_t)(m >> 16);
+    out[2] = (uint8_t)(m >> 8);
+    out[3] = (uint8_t)m;
+}
+
+/*
+ * An input with its pull-up on, which in seesaw is three writes: direction,
+ * pull enable, and the output latch high to make the pull an up rather than a
+ * down. The switch closes to ground, so the pin reads low while held.
+ */
+static esp_err_t button_init(void)
+{
+    uint8_t mask[4];
+    pin_mask(mask);
+
+    esp_err_t err = seesaw_write(SEESAW_GPIO_BASE, SEESAW_GPIO_DIRCLR_BULK, mask, 4);
+    if (err == ESP_OK) {
+        err = seesaw_write(SEESAW_GPIO_BASE, SEESAW_GPIO_PULLENSET, mask, 4);
+    }
+    if (err == ESP_OK) {
+        err = seesaw_write(SEESAW_GPIO_BASE, SEESAW_GPIO_BULK_SET, mask, 4);
+    }
+    return err;
+}
+
+static esp_err_t read_button(bool *down)
+{
+    uint8_t b[4], mask[4];
+
+    const esp_err_t err = seesaw_read(SEESAW_GPIO_BASE, SEESAW_GPIO_BULK, b, sizeof(b));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    pin_mask(mask);
+    *down = ((b[0] & mask[0]) | (b[1] & mask[1]) | (b[2] & mask[2]) | (b[3] & mask[3])) == 0;
+    return ESP_OK;
+}
+
+/*
+ * One press per trip down, reported on the way down. Holding the knob is one
+ * press however long it lasts, and the release is not an event at all.
+ */
+static void poll_button(void)
+{
+    static bool was_down;
+    static int64_t last_press_us;
+
+    bool down = false;
+    if (s_on_press == NULL || read_button(&down) != ESP_OK) {
+        return;     /* the delta read below reports a sick bus; once is enough */
+    }
+
+    const bool pressed = down && !was_down;
+    was_down = down;
+
+    if (!pressed) {
+        return;
+    }
+
+    const int64_t now = esp_timer_get_time();
+    if (now - last_press_us < (int64_t)ENC_PRESS_GAP_MS * 1000) {
+        return;
+    }
+    last_press_us = now;
+
+    if (s_on_press()) {
+        flash(ENC_ACCEPTED);
+    }
+}
+
+/* ---- The count ----------------------------------------------------------- */
+
 /*
  * Counts turned since the last call. seesaw clears the register as it is read,
  * so this is genuinely a delta and nothing accumulates twice.
@@ -244,6 +347,7 @@ static void encoder_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(ENC_POLL_INTERVAL_MS));
 
         flash_expire();
+        poll_button();
 
         int32_t delta = 0;
         const esp_err_t err = read_delta(&delta);
@@ -272,7 +376,7 @@ static void encoder_task(void *arg)
     }
 }
 
-esp_err_t rotary_encoder_start(rotary_encoder_cb_t on_turn)
+esp_err_t rotary_encoder_start(rotary_encoder_cb_t on_turn, rotary_encoder_press_cb_t on_press)
 {
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = ENC_I2C_PORT,
@@ -349,10 +453,18 @@ esp_err_t rotary_encoder_start(rotary_encoder_cb_t on_turn)
         ESP_LOGW(TAG, "the knob's NeoPixel did not answer; carrying on unlit");
     }
 
+    /* As with the pixel: a button that does not answer still leaves a knob. */
+    if (on_press != NULL && button_init() != ESP_OK) {
+        ESP_LOGW(TAG, "could not set up the button on seesaw pin %d; carrying on "
+                      "without it", ENC_BUTTON_PIN);
+        on_press = NULL;
+    }
+
     int32_t discard = 0;
     (void)read_delta(&discard);   /* clear anything the reset left behind */
 
     s_on_turn = on_turn;
+    s_on_press = on_press;
 
     if (xTaskCreate(encoder_task, "encoder", TASK_STACK, NULL, TASK_PRIO, NULL) != pdPASS) {
         err = ESP_ERR_NO_MEM;

@@ -33,6 +33,7 @@ extern "C" {
 /* The ring, in the order the knob walks it. */
 typedef enum {
     SCREEN_CLOCK,
+    SCREEN_ALARM,
     SCREEN_WEATHER,
     SCREEN_FORECAST,
     SCREEN_STATUS,

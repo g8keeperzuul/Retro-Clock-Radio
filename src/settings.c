@@ -6,8 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
+#include "alarm_sounds.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -32,6 +34,23 @@ static const char *TAG = "settings";
 #endif
 #ifndef MQTT_PUBLISH_INTERVAL_S
 #define MQTT_PUBLISH_INTERVAL_S 300
+#endif
+
+/*
+ * Whether a newly set alarm rings, until the knob says otherwise. There is no
+ * build flag for the alarm time itself: "no alarm" has to be what an empty
+ * payload goes back to, and a compiled-in time would make that impossible.
+ */
+#ifndef ALARM_ENABLED
+#define ALARM_ENABLED 1
+#endif
+#if ALARM_ENABLED
+#define ALARM_ENABLED_DEFAULT "ON"
+#else
+#define ALARM_ENABLED_DEFAULT "OFF"
+#endif
+#ifndef ALARM_SOUND
+#define ALARM_SOUND "retro-alarm.wav"
 #endif
 
 #ifndef WIFI_SSID
@@ -62,7 +81,7 @@ static const char *TAG = "settings";
  */
 #define VALUE_MAX 128
 
-#define MAX_OBSERVERS 4
+#define MAX_OBSERVERS 6
 
 /* ---- Validators ---------------------------------------------------------- */
 
@@ -195,6 +214,117 @@ static bool valid_broker_uri(const char *v)
     return false;
 }
 
+/* "HH:MM" exactly, as alarm_time_canon() writes it. */
+static bool valid_alarm_time(const char *v)
+{
+    return strlen(v) == 5 && v[0] >= '0' && v[0] <= '2' && v[1] >= '0' && v[1] <= '9' &&
+           v[2] == ':' && v[3] >= '0' && v[3] <= '5' && v[4] >= '0' && v[4] <= '9' &&
+           ((v[0] - '0') * 10 + (v[1] - '0')) < 24;
+}
+
+static bool valid_switch(const char *v)
+{
+    return strcmp(v, "ON") == 0 || strcmp(v, "OFF") == 0;
+}
+
+static bool valid_alarm_sound(const char *v)
+{
+    return alarm_sound_track(v) != 0;
+}
+
+/* ---- Canonical forms ----------------------------------------------------- */
+
+/*
+ * Each of these rewrites `v` in place, before validation, into the one form
+ * the parameter is stored and reported in. The buffer is VALUE_MAX long and
+ * none of them makes a value longer than it was, bar "1" becoming "ON".
+ */
+
+/* A whole number of exactly one or two digits. Returns -1 otherwise. */
+static int two_digits(const char *p, const char **end)
+{
+    if (p[0] < '0' || p[0] > '9') {
+        return -1;
+    }
+    int n = p[0] - '0';
+    p++;
+    if (p[0] >= '0' && p[0] <= '9') {
+        n = n * 10 + (p[0] - '0');
+        p++;
+    }
+    *end = p;
+    return n;
+}
+
+/*
+ * H:MM, HH:MM or HH:MM:SS on a 24-hour clock -- the last is what a Home
+ * Assistant time helper sends. Seconds are checked and then dropped: the alarm
+ * goes off on the minute. Anything else becomes empty, which settings_set()
+ * treats as "no alarm"; that is the rule for this parameter, not a rejection.
+ */
+static void alarm_time_canon(char *v)
+{
+    const char *p = v;
+    const int h = two_digits(p, &p);
+    int m = -1, s = 0;
+
+    if (h >= 0 && *p == ':') {
+        const char *q = p + 1;
+        m = two_digits(q, &p);
+        if (p != q + 2) {
+            m = -1;             /* minutes always come as two digits */
+        }
+    }
+    if (m >= 0 && *p == ':') {
+        const char *q = p + 1;
+        s = two_digits(q, &p);
+        if (p != q + 2) {
+            s = -1;
+        }
+    }
+
+    if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59 || *p != '\0') {
+        v[0] = '\0';
+        return;
+    }
+    snprintf(v, VALUE_MAX, "%02d:%02d", h, m);
+}
+
+/*
+ * The spellings Home Assistant and people actually use. Anything unrecognised
+ * is left alone, so the validator rejects it rather than it quietly becoming
+ * one or the other.
+ */
+static void switch_canon(char *v)
+{
+    static const char *ON[] = {"on", "true", "1", "yes", "enable", "enabled"};
+    static const char *OFF[] = {"off", "false", "0", "no", "disable", "disabled"};
+
+    for (unsigned i = 0; i < sizeof(ON) / sizeof(ON[0]); i++) {
+        if (strcasecmp(v, ON[i]) == 0) {
+            strcpy(v, "ON");
+            return;
+        }
+        if (strcasecmp(v, OFF[i]) == 0) {
+            strcpy(v, "OFF");
+            return;
+        }
+    }
+}
+
+/*
+ * Just the file name: "./sfx/retro-alarm.wav" and "retro-alarm.wav" are the
+ * same sound, since sfx/ is where the card is built from and not a place the
+ * DFPlayer knows about.
+ */
+static void alarm_sound_canon(char *v)
+{
+    const char *slash = strrchr(v, '/');
+    if (slash != NULL) {
+        memmove(v, slash + 1, strlen(slash + 1) + 1);
+    }
+}
+
 /* ---- The table ----------------------------------------------------------- */
 
 /*
@@ -209,6 +339,7 @@ static const struct {
     const char *fallback;  /* the compile-time value */
     bool (*valid)(const char *);
     bool boot_only;        /* stored now, picked up at the next start */
+    void (*canon)(char *); /* optional: rewrite into the stored form first */
 } TABLE[SETTING_COUNT] = {
     [SETTING_LATITUDE] = {
         "OWM_LATITUDE", "number", "s_lat", OWM_LATITUDE, valid_latitude },
@@ -221,6 +352,15 @@ static const struct {
     [SETTING_MQTT_INTERVAL] = {
         "MQTT_PUBLISH_INTERVAL_S", "number", "s_mqtt_iv",
         STRINGIFY(MQTT_PUBLISH_INTERVAL_S), valid_interval },
+    [SETTING_ALARM_TIME] = {
+        "ALARM_TIME", "text", "s_alarm", "", valid_alarm_time,
+        .canon = alarm_time_canon },
+    [SETTING_ALARM_ENABLED] = {
+        "ALARM_ENABLED", "switch", "s_alarm_on", ALARM_ENABLED_DEFAULT, valid_switch,
+        .canon = switch_canon },
+    [SETTING_ALARM_SOUND] = {
+        "ALARM_SOUND", "text", "s_alarm_snd", ALARM_SOUND, valid_alarm_sound,
+        .canon = alarm_sound_canon },
 
     /* Everything below is how the radio reaches the network and the broker,
      * which is why none of it can be changed under a running connection. */
@@ -286,6 +426,22 @@ static void notify(setting_id_t id)
     }
 }
 
+/*
+ * The one rule that spans two parameters: with no alarm time there is nothing
+ * to be enabled, so ALARM_ENABLED is OFF for as long as ALARM_TIME is empty.
+ * Without it the switch could read ON over MQTT while the screen said NOT SET,
+ * and neither would be lying about its own parameter.
+ *
+ * It is held in three places. A set of ON while the time is empty is
+ * rejected; clearing the time switches the alarm OFF; and setting a time where
+ * there was none switches it to ALARM_ENABLED's default, since setting an
+ * alarm is the plainest way there is of asking for one.
+ */
+static bool alarm_unset(void)
+{
+    return s_value[SETTING_ALARM_TIME][0] == '\0';
+}
+
 /* ---- The interface ------------------------------------------------------- */
 
 void settings_init(void)
@@ -301,6 +457,9 @@ void settings_init(void)
         ESP_LOGW(TAG, "no NVS (%s): every parameter stays on its built-in value",
                  esp_err_to_name(err));
         apply(SETTING_TIMEZONE);
+        if (alarm_unset()) {
+            snprintf(s_value[SETTING_ALARM_ENABLED], VALUE_MAX, "OFF");
+        }
         return;
     }
     s_nvs_open = true;
@@ -337,6 +496,11 @@ void settings_init(void)
             ESP_LOGI(TAG, "%s is overridden from NVS", TABLE[i].name);
         }
     }
+
+    /* Stored before the rule existed, or a default of ON with no alarm. */
+    if (alarm_unset() && settings_get_bool(SETTING_ALARM_ENABLED)) {
+        settings_set(SETTING_ALARM_ENABLED, "OFF");
+    }
 }
 
 const char *settings_get(setting_id_t id)
@@ -371,6 +535,11 @@ int32_t settings_get_int(setting_id_t id)
     return (id < SETTING_COUNT) ? (int32_t)strtol(s_value[id], NULL, 10) : 0;
 }
 
+bool settings_get_bool(setting_id_t id)
+{
+    return (id < SETTING_COUNT) && strcmp(s_value[id], "ON") == 0;
+}
+
 esp_err_t settings_set(setting_id_t id, const char *value)
 {
     if (id >= SETTING_COUNT || value == NULL) {
@@ -396,6 +565,14 @@ esp_err_t settings_set(setting_id_t id, const char *value)
     clean[n] = '\0';
 
     /*
+     * Before the empty check, not after: for ALARM_TIME the canonical form of
+     * something unparseable *is* empty, and that is what clears the alarm.
+     */
+    if (TABLE[id].canon != NULL) {
+        TABLE[id].canon(clean);
+    }
+
+    /*
      * An empty value means "forget the override". The rule lives here rather
      * than in the MQTT handler so that every caller gets it: a validator that
      * rejects the empty string and a caller that treats it as a reset is the
@@ -411,7 +588,13 @@ esp_err_t settings_set(setting_id_t id, const char *value)
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (id == SETTING_ALARM_ENABLED && strcmp(clean, "ON") == 0 && alarm_unset()) {
+        ESP_LOGW(TAG, "ALARM_ENABLED: no alarm time is set, so it stays OFF");
+        return ESP_ERR_INVALID_ARG;
+    }
+
     const bool boot_only = TABLE[id].boot_only;
+    const bool was_unset = alarm_unset();
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     const bool same = (strcmp(s_stored[id], clean) == 0);
@@ -456,6 +639,10 @@ esp_err_t settings_set(setting_id_t id, const char *value)
     }
     notify(id);
 
+    if (id == SETTING_ALARM_TIME && was_unset) {
+        settings_set(SETTING_ALARM_ENABLED, TABLE[SETTING_ALARM_ENABLED].fallback);
+    }
+
     return ESP_OK;
 }
 
@@ -463,6 +650,12 @@ esp_err_t settings_reset(setting_id_t id)
 {
     if (id >= SETTING_COUNT) {
         return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Going back to a default of ON is not allowed with no alarm to be on. */
+    if (id == SETTING_ALARM_ENABLED && alarm_unset() &&
+        strcmp(TABLE[id].fallback, "OFF") != 0) {
+        return settings_set(id, "OFF");
     }
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -482,6 +675,10 @@ esp_err_t settings_reset(setting_id_t id)
     ESP_LOGI(TAG, "%s override cleared; the built-in value is used%s",
              TABLE[id].name, TABLE[id].boot_only ? " from the next restart" : "");
     notify(id);
+
+    if (id == SETTING_ALARM_TIME) {
+        settings_set(SETTING_ALARM_ENABLED, "OFF");
+    }
 
     return ESP_OK;
 }

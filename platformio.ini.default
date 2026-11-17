@@ -62,7 +62,16 @@ build_flags =
     -D WIFI_CONNECT_MAX_RETRY=0
 
     ; If no wifi connection is established after MAX_RETRY attempts, then either reboot (1) or skip (0)
-    -D WIFI_CONNECT_RESTART_ON_FAIL=0    
+    -D WIFI_CONNECT_RESTART_ON_FAIL=0
+
+    ; Ceiling on Wi-Fi transmit power, in dBm (2-20); 0 leaves the driver's 20.
+    ; The radio's transmit bursts are its heaviest draw, and on a weak USB
+    ; supply they can pull the 3.3 V rail under the brownout detector -- the
+    ; "Brownout detector was triggered" reset as Wi-Fi comes up. 15 dBm is a
+    ; third of the power of 20 and rarely missed indoors. A workaround for a
+    ; supply without headroom, not a fix: a better cable or adapter, or a
+    ; capacitor across 3V3 and GND, is the real one.
+    -D WIFI_MAX_TX_POWER_DBM=15
 
     ; Per-attempt deadline for association + DHCP.
     -D WIFI_CONNECT_TIMEOUT_MS=15000
@@ -197,8 +206,8 @@ build_flags =
     ; Detents in one revolution of the encoder. Not a preference -- it is what
     ; the part soldered to the breakout actually has, and it is what makes one
     ; turn of the knob walk the screens exactly once. The dial is divided by
-    ; the number of screens, so four screens take five detents each; add a
-    ; fifth screen and they become four each, with nothing to edit here.
+    ; the number of screens, so five screens take four detents each; add a
+    ; sixth and the remainder is spread, with nothing to edit here.
     -D ENC_POSITIONS=20
 
     ; The NeoPixel under the knob, which reports what became of each turn: green
@@ -208,6 +217,13 @@ build_flags =
     -D ENC_LED_PIN=6
     -D ENC_LED_BRIGHTNESS=40
     -D ENC_FLASH_MS=150
+
+    ; The knob is also a push button, on seesaw pin 24 on this breakout. It
+    ; silences a ringing alarm, and on the alarm screen switches the alarm on
+    ; and off; anywhere else it does nothing. A second press inside the gap is
+    ; taken to be the switch bouncing.
+    -D ENC_BUTTON_PIN=24
+    -D ENC_PRESS_GAP_MS=250
 
     ; How long the knob must stand still before the new screen is drawn. A
     ; refresh takes 25 s, so this is what makes spinning past three screens cost
@@ -255,6 +271,56 @@ build_flags =
     ; power at all, so the key stays legible on the glass after the radio is
     ; unplugged, and survives into any photograph of the device.
     -D STATUS_MASK_API_KEY=0
+
+    ; --- Alarm -------------------------------------------------------------
+    ; The alarm time is not a build flag: it is set over MQTT (ALARM_TIME, as
+    ; HH:MM) and kept in NVS, and "no alarm" is what an empty or unparseable
+    ; value means. These are the defaults for the other two alarm parameters,
+    ; both also settable over MQTT.
+    ;
+    ; Whether a newly set alarm will ring. The knob's button flips it while the
+    ; alarm screen is showing.
+    -D ALARM_ENABLED=1
+
+    ; Must be a name in SOUNDS[] in src/alarm_sounds.c, which is also what
+    ; tools/make_sd_card.py puts on the DFPlayer's card.
+    -D ALARM_SOUND=\"retro-alarm.wav\"
+
+    ; How long the sound loops before stopping on its own. A press of the knob
+    ; stops it sooner.
+    -D ALARM_RING_S=300
+
+    ; --- DFPlayer Mini -----------------------------------------------------
+    ; The alarm's sound, from the module's own microSD card over UART1 at
+    ; 9600 baud. 17 and 18 are UART1's IO MUX pins on the S3, free on this
+    ; board, and away from both the panel block (10-14) and the I2C pair (8/9).
+    ; Power the module from 5 V, not 3V3, and put a 1k resistor in series with
+    ; our TX -- DFRobot's own advice against hiss in the speaker.
+    -D DFPLAYER_PIN_TX=17
+    -D DFPLAYER_PIN_RX=18
+
+    ; The module's BUSY output, low while a track plays. With it wired, the pin
+    ; is what decides that a sound is playing and when each pass of the loop
+    ; has ended; -1 falls back to the module's serial "finished" messages.
+    ; GPIO 3 is a strapping pin, but only for JTAG source selection and only
+    ; once an eFuse asks it to be, so it is a safe input on a stock chip.
+    -D DFPLAYER_PIN_BUSY=3
+
+    ; 0 to 30, the module's own scale.
+    -D DFPLAYER_VOLUME=20
+
+    ; How long to leave a player that did not answer before trying again. Not
+    ; having one fitted is not an error; the alarm is just silent.
+    -D DFPLAYER_RETRY_S=60
+
+    ; Set to 1 to play the first sound on the card once, as soon as the player
+    ; first answers after power-up -- a test of the whole audio path. Cut off
+    ; after AUDIO_BOOT_TEST_MAX_S if the track is longer.
+    -D AUDIO_BOOT_TEST=0
+    -D AUDIO_BOOT_TEST_MAX_S=30
+
+    ; Set to 1 to print every frame sent to and received from the module.
+    -D DFPLAYER_DEBUG=0
 
     ; --- MQTT diagnostics --------------------------------------------------
     ; Publishes the status screen's fields, plus RSSI, as a JSON object every

@@ -22,3 +22,12 @@ gcc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -g -O1 \
     "$CJSON/cJSON.c" -lm
 
 TZ=EST5EDT "$OUT/test_weather"
+
+# settings.c includes ESP-IDF headers, so it builds against the same stubs as
+# the screen renderers; the test supplies an in-memory NVS of its own.
+gcc -std=gnu11 -Wall -Wextra -Wno-unused-parameter -g -O1 \
+    -I src -I tools/hostrender/stub \
+    -o "$OUT/test_settings" \
+    test/host/test_settings.c src/settings.c src/alarm_sounds.c
+
+"$OUT/test_settings"

@@ -42,6 +42,21 @@
 #define WIFI_CONNECT_BACKOFF_MAX_MS 30000
 #endif
 
+/*
+ * A ceiling on transmit power, in whole dBm, 2 to 20; 0 leaves the driver's
+ * own (20 dBm here). Transmitting is the radio's heaviest draw -- a few hundred
+ * milliamps in bursts -- and on a supply without headroom those bursts pull
+ * the 3.3 V rail under the brownout detector. Lowering this shrinks them at
+ * the cost of range; 15 dBm is a third of the power of 20 and rarely missed
+ * indoors. A workaround for a weak supply, not a fix for one.
+ */
+#ifndef WIFI_MAX_TX_POWER_DBM
+#define WIFI_MAX_TX_POWER_DBM 0
+#endif
+#if WIFI_MAX_TX_POWER_DBM != 0 && (WIFI_MAX_TX_POWER_DBM < 2 || WIFI_MAX_TX_POWER_DBM > 20)
+#error "WIFI_MAX_TX_POWER_DBM must be 0 (driver default) or 2 to 20"
+#endif
+
 /* sizeof() includes the NUL; the driver's fields are 32 and 64 bytes + NUL. */
 _Static_assert(sizeof(WIFI_SSID) <= 33, "WIFI_SSID is longer than 32 characters");
 _Static_assert(sizeof(WIFI_PASSWORD) <= 65, "WIFI_PASSWORD is longer than 64 characters");
@@ -199,6 +214,23 @@ esp_err_t wifi_sta_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
 
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    /*
+     * Only possible once the driver has started, so the short calibration
+     * inside esp_wifi_start() runs uncapped; everything transmitted after it
+     * -- the scan, the association, all traffic -- is held to the ceiling.
+     */
+#if WIFI_MAX_TX_POWER_DBM != 0
+    const esp_err_t tx_err = esp_wifi_set_max_tx_power(WIFI_MAX_TX_POWER_DBM * 4);
+    int8_t quarter_dbm = 0;
+    if (tx_err == ESP_OK && esp_wifi_get_max_tx_power(&quarter_dbm) == ESP_OK) {
+        /* The driver rounds to the steps the PHY has, so report what it took. */
+        ESP_LOGI(TAG, "transmit power capped at %d.%02d dBm (asked for %d)",
+                 quarter_dbm / 4, (quarter_dbm % 4) * 25, WIFI_MAX_TX_POWER_DBM);
+    } else {
+        ESP_LOGW(TAG, "could not cap transmit power: %s", esp_err_to_name(tx_err));
+    }
+#endif
 
     uint8_t mac[6] = { 0 };
     if (esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK) {

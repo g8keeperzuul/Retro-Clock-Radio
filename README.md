@@ -6,6 +6,10 @@
 | [ESP32-S3 v1.1](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.1.html) | ESP32-S3-DevKitC-1 Development Board BT 2.4G Wifi Module for Arduino 8MB PSRAM 16MB FLASH N16R8 42Pin CH340C Type-C ESP32 S3. Verify your microcontroller details with [ESPConnect](https://thelastoutpostworkshop.github.io/ESPConnect/). |
 | [5.83inch E-Paper Display](https://www.waveshare.com/5.83inch-e-paper-g.htm) | E-ink Display, 648 × 480, Red/Yellow/Black/White, SPI Interface |
 | [Rotary Encoder](https://www.adafruit.com/product/5880) | Adafruit I2C Stemma QT Rotary Encoder Breakout with Encoder - STEMMA QT / Qwiic |
+| [DFPlayer Mini](https://wiki.dfrobot.com/DFPlayer_Mini_SKU_DFR0299) | DFRobot MP3/WAV player module with its own microSD slot and 3 W amplifier, UART controlled. Plays the alarm. [Datasheet](docs/DFPlayer__DFR0299_mp3-player-module_datasheet_V1.0.pdf) |
+| Mini speaker | Pimoroni mini speaker, 4 Ω 3 W, on the DFPlayer's SPK1/SPK2. [Datasheet](docs/Pimoroni_mini-speaker_ST404004-30.pdf) |
+| 470 uF capacitor | Across 3V3 + GND rails of microcontroller to handle wifi power spikes. |
+| 1000 uF + 0.1 uF / 100nF capacitors | Across 5V + GRD rails of DFPlayer to handle playback power spikes. | 
 
 ## Wiring
 Every pin is a `build_flag` in [platformio.ini](platformio.ini) — rewire freely
@@ -92,6 +96,38 @@ GPIO 21 sits at the far end of the header from both the panel block (10–14) an
 the I2C pair, so the strip cable routes on its own. See
 [The countdown strip](#the-countdown-strip) for what it displays.
 
+### DFPlayer Mini
+Two wires of UART1 at 9600 baud. The module reads its own microSD card and
+drives the speaker itself; the ESP32 only tells it which track to play.
+
+| DFPlayer | ESP32-S3 GPIO | Macro |
+|---|---|---|
+| VCC / GND | **5V** / GND | — |
+| RX | 17, through 1 kΩ | `DFPLAYER_PIN_TX` |
+| TX | 18 | `DFPLAYER_PIN_RX` |
+| BUSY | 3 | `DFPLAYER_PIN_BUSY` |
+| SPK1 / SPK2 | speaker | — |
+
+**Power it from 5V**, not 3V3 — in practice it wants 4.2–5.0 V, and on 3V3 it
+fails to answer at all. The 1 kΩ in series with our TX is
+DFRobot's advice against hiss. 17 and 18 are UART1's IO MUX pins on the S3, so
+the signal leaves the pad directly. Note the macro names are from *our* side:
+`DFPLAYER_PIN_TX` is the ESP32 pin that transmits, wired to the module's RX.
+
+BUSY is low while a track plays. It is optional (`DFPLAYER_PIN_BUSY=-1`), but
+with it the firmware knows from the module's own output pin whether sound is
+being made, rather than from serial replies. GPIO 3 is one of the strapping
+pins below, but only for JTAG source selection and only once an eFuse has been
+burned to enable that, so on a stock chip it is an ordinary input. The S3's
+pins are not 5 V tolerant, but the datasheet (section 6) gives the module's I/O
+as 3.3 V TTL even on a 5V supply, so BUSY and TX connect directly. Worth one
+multimeter reading on a new module all the same.
+
+A swapped TX/RX pair is the classic fault, and from the ESP32 it looks exactly
+like a module that is not there. The log says which pins it tried; the
+[DFPlayer-test](../DFPlayer-test) project has a UART self-test for proving the
+wiring on its own.
+
 Pins to leave alone on this board: 19/20 are native USB, 43/44 the console UART,
 26–32 the internal flash, 33–37 the PSRAM on an N16R8 module, and 0, 3, 45 and
 46 are strapping pins.
@@ -112,6 +148,7 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `WIFI_PASSWORD` | *(required)* | Pre-shared key |
 | `WIFI_HOSTNAME` | `retro-clock-radio` | Name requested from DHCP |
 | `WIFI_AUTH_THRESHOLD` | `WIFI_AUTH_WPA2_PSK` | Weakest acceptable AP security |
+| `WIFI_MAX_TX_POWER_DBM` | `0` | Transmit power ceiling, 2–20 dBm; 0 = driver default (20). Lower it if Wi-Fi start-up trips the brownout detector |
 | `WIFI_CONNECT_MAX_RETRY` | `0` | Attempts before reboot; 0 = retry forever |
 | `WIFI_CONNECT_TIMEOUT_MS` | `15000` | Per-attempt deadline for assoc + DHCP |
 | `WIFI_CONNECT_BACKOFF_MIN_MS` | `1000` | Initial delay between attempts |
@@ -143,6 +180,8 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `ENC_LED_PIN` | `6` | seesaw pin the knob's NeoPixel is wired to |
 | `ENC_LED_BRIGHTNESS` | `40` | Out of 255; full brightness is painful |
 | `ENC_FLASH_MS` | `150` | How long the knob lights up per turn |
+| `ENC_BUTTON_PIN` | `24` | seesaw pin the knob's push switch is wired to |
+| `ENC_PRESS_GAP_MS` | `250` | A second press inside this is switch bounce |
 | `SCREEN_SETTLE_MS` | `1200` | Quiet time on the knob before the new screen is drawn |
 | `GAUGE_PIN` | `21` | WS2812 countdown strip data line |
 | `GAUGE_LED_COUNT` | `6` | Pixels on the strip |
@@ -150,6 +189,17 @@ sources. Set `WIFI_SSID` and `WIFI_PASSWORD` there before the first build.
 | `GAUGE_TICK_MS` | `200` | How often the remaining time is re-read |
 | `STATUS_LINGER_S` | `120` | How long the diagnostics screen stays up |
 | `STATUS_MASK_API_KEY` | `0` | 1 = show only the first and last four characters of the key |
+| `ALARM_ENABLED` | `1` | Whether a set alarm rings, until changed; **settable at runtime** |
+| `ALARM_SOUND` | `"retro-alarm.wav"` | A name from `SOUNDS[]` in `alarm_sounds.c`; **settable at runtime** |
+| `ALARM_RING_S` | `300` | How long the alarm loops before stopping on its own |
+| `DFPLAYER_PIN_TX` | `17` | ESP32 TX, to the DFPlayer's RX |
+| `DFPLAYER_PIN_RX` | `18` | ESP32 RX, from the DFPlayer's TX |
+| `DFPLAYER_PIN_BUSY` | `3` | ESP32 input from the DFPlayer's BUSY; -1 if not wired |
+| `DFPLAYER_VOLUME` | `20` | 0–30, the module's own scale |
+| `DFPLAYER_RETRY_S` | `60` | How long to leave an unanswering player before trying again |
+| `DFPLAYER_DEBUG` | `0` | 1 = print every frame to and from the module |
+| `AUDIO_BOOT_TEST` | `0` | 1 = play the first sound once when the player first answers after power-up |
+| `AUDIO_BOOT_TEST_MAX_S` | `30` | Longest the boot test plays before it is cut off |
 | `MQTT_ENABLED` | `1` | 0 = leave the client out of the build |
 | `MQTT_BROKER_URI` | *(required)* | e.g. `mqtt://10.0.0.200:1883` |
 | `MQTT_USERNAME` | `""` | Empty for an anonymous broker |
@@ -191,7 +241,7 @@ pio run -t upload -t monitor
 Bootstraps the ESP32-S3 (NVS, TCP/IP stack, default event loop), brings up the
 e-paper panel, joins a Wi-Fi network as a station, sets the real-time clock from
 NTP, and hands the panel to the screen manager. Turning the rotary encoder walks
-the ring of screens.
+the ring of screens; pressing it silences the alarm.
 
 - [src/main.c](src/main.c) — boot banner, bring-up, link/clock heartbeat
 - [src/wifi_sta.c](src/wifi_sta.c) — station bring-up, retry/backoff, auto-reconnect
@@ -204,6 +254,11 @@ the ring of screens.
 - [src/epd_weather.c](src/epd_weather.c) — the daily weather screen
 - [src/epd_forecast.c](src/epd_forecast.c) — the two-day forecast screen
 - [src/epd_status.c](src/epd_status.c) — the diagnostics screen
+- [src/epd_alarm.c](src/epd_alarm.c) — the alarm screen
+- [src/alarm.c](src/alarm.c) — rings at the set time; what the knob's button does
+- [src/alarm_sounds.c](src/alarm_sounds.c) — sound names to DFPlayer track numbers
+- [src/audio_player.c](src/audio_player.c) — the DFPlayer Mini, owned by one task
+- [components/DFRobotDFPlayerMini](components/DFRobotDFPlayerMini) — DFRobot's driver, ported to ESP-IDF; vendored from DFPlayer-test
 - [src/diagnostics.c](src/diagnostics.c) — the fields both the screen and MQTT report
 - [src/settings.c](src/settings.c) — build flags that can be overridden at runtime
 - [src/mqtt_report.c](src/mqtt_report.c) — diagnostics published as JSON
@@ -251,20 +306,20 @@ whichever task runs it.
 
 ### Choosing a screen
 [src/screen_manager.c](src/screen_manager.c) is the only thing that writes to the
-panel. The screens — clock, weather dial, two-day forecast, status — are laid
-out around **one revolution of the knob**. The encoder has twenty detents, so
-each of the four screens occupies five of them:
+panel. The screens — clock, alarm, weather dial, two-day forecast, status — are
+laid out around **one revolution of the knob**. The encoder has twenty detents,
+so each of the five screens occupies four of them:
 
 ```
-position   1  2  3  4  5 | 6  7  8  9 10 |11 12 13 14 15 |16 17 18 19 20
-screen     \___ clock __/ \__ weather __/ \__ forecast _/ \___ status _/
+position   1  2  3  4 | 5  6  7  8 | 9 10 11 12 |13 14 15 16 |17 18 19 20
+screen     \_ clock _/ \_ alarm _/ \_ weather/ \_forecast/ \_ status _/
 ```
 
-Turning *within* a screen's five changes nothing — the dial has somewhere to be,
+Turning *within* a screen's four changes nothing — the dial has somewhere to be,
 rather than every click moving the panel. The order in `SCREENS[]` is the order
 round the dial, and adding a screen means a line in that table and a draw
 function, nothing else: the division is `position * SCREEN_COUNT /
-ENC_POSITIONS`, so a fifth screen re-divides the dial into fours on its own.
+ENC_POSITIONS`, so the alarm screen re-divided the dial from fives into fours on its own.
 Counts that do not divide twenty spread the remainder rather than leaving a gap
 — three screens take 7, 7 and 6. The bring-up test pattern is deliberately not
 on the dial.
@@ -316,7 +371,7 @@ the knob is actually asking:
 | 🔴 **red** | Discarded: the panel is mid-refresh |
 
 White is off to one side of the traffic-light scheme on purpose, because it is
-neither a go nor a stop. It matters more than it looks: with five detents to a
+neither a go nor a stop. It matters more than it looks: with four detents to a
 screen, **most clicks land on it**, and a green flash followed by a panel that
 never changes would read as a fault.
 
@@ -337,8 +392,8 @@ change is accepted but held off by the 180-second floor, the strip fills and the
 empties as the wait runs down, all six going dark as the refresh begins.
 
 The colour is the screen that is *coming*, not the one showing — 🟡 yellow for
-the clock, 🔵 blue for the weather dial, cyan for the two-day forecast and
-violet for status. Those live in `SCREENS[]` in
+the clock, 🔴 red for the alarm, 🔵 blue for the weather dial, cyan for the
+two-day forecast and violet for status. Those live in `SCREENS[]` in
 [screen_manager.c](src/screen_manager.c) beside the name and draw function, on the
 same principle that put the knob's verdict colours inside the encoder driver:
 whoever owns the vocabulary owns the mapping. The gauge knows only red, green and
@@ -437,6 +492,149 @@ when thresholded to one bit, which is what sets `FONT_LABEL`.
 All type is black. The dial used to set its numerals in yellow behind a black
 outline, which suited the blocky face it had then; a one-pixel outline on a
 three-pixel stem leaves nothing.
+
+## Alarm
+One alarm, on a 24-hour clock, set over MQTT and switched on and off with the
+knob. When the local time reaches it the DFPlayer loops the chosen sound for
+five minutes (`ALARM_RING_S`) and then stops on its own.
+
+![alarm](./docs/pictures/alarm.png)
+
+### Setting it
+Three parameters, with the same `get`/`set` topics as every other
+[runtime parameter](#changing-parameters-over-mqtt) and kept in NVS the same way:
+
+| Parameter | Topic | Values |
+|---|---|---|
+| `ALARM_TIME` | `homeassistant/text/<host>/ALARM_TIME/<get\|set>` | `HH:MM`, 24-hour; empty = no alarm |
+| `ALARM_ENABLED` | `homeassistant/switch/<host>/ALARM_ENABLED/<get\|set>` | `ON` / `OFF` |
+| `ALARM_SOUND` | `homeassistant/text/<host>/ALARM_SOUND/<get\|set>` | a file name from `SOUNDS[]` |
+
+```sh
+mosquitto_pub -h 10.0.0.200 -u mqtt-user -P ...  \
+    -t 'homeassistant/text/retro-clock-radio/ALARM_TIME/set' -m 06:45
+```
+
+`ALARM_TIME` breaks the rule every other parameter follows. Elsewhere a value
+that does not validate is **rejected** and the old one stays. Here, an empty
+payload, `null`, or **anything that does not parse as a 24-hour time unsets the
+alarm**. `6:45`, `06:45` and `06:45:00` (what a Home Assistant time helper sends)
+are all accepted and stored as `06:45`; `24:00`, `6:45pm` and `0645` all mean
+"no alarm". The get topic then goes empty, which also clears its retention.
+
+`ALARM_ENABLED` takes `ON`/`OFF` and the usual spellings of them (`on`, `true`,
+`1`…); anything else is rejected. It **follows the alarm time**: while
+`ALARM_TIME` is empty it is held `OFF` — a set of `ON` is rejected, and the get
+topic is republished as `OFF` to say so. Clearing the time switches it `OFF`;
+setting a time where there was none switches it to its default
+(`ALARM_ENABLED=1` means `ON`). Changing an already-set time leaves it alone. `ALARM_SOUND` accepts `retro-alarm.wav` or
+`./sfx/retro-alarm.wav` alike, and rejects a name not in the table. There is no
+build flag for the time itself: "no alarm" has to be what an empty payload goes
+back to, and a compiled-in time would make that impossible.
+
+### The knob's button
+The button did nothing before the alarm, and on most screens still does not.
+Two exceptions, in this order:
+
+1. **While the alarm is ringing**, a press stops it — on any screen. This is
+   checked first, so the press that silences the alarm on the alarm screen
+   never also switches tomorrow's off.
+2. **With the alarm screen showing**, a press switches the alarm on or off —
+   unless no time is set, in which case it stays off and the knob stays dark. The
+   change goes through `settings_set()`, so it is stored, published on the get
+   topic, and the screen redraws through the usual path (the 180-second floor
+   still applies).
+
+A press that did something flashes the knob green; one that did nothing leaves
+it dark, exactly as before. Switching the alarm off over MQTT while it is
+ringing stops it too. "Showing" means where the knob points, so a press during
+the wait for the alarm screen to be drawn counts.
+
+The alarm rings once per matching minute. Silencing it inside that minute does
+not set it off again, and an alarm set for the minute it already is goes off
+at once — the least surprising reading of "set it for now".
+
+### The sound card
+The DFPlayer plays by **number**, not by name. The card follows the layout in
+the module's [datasheet](docs/DFPlayer__DFR0299_mp3-player-module_datasheet_V1.0.pdf)
+(section 3.4.4): folders in the root named with two digits, `01`–`99`, holding
+files named with three digits and nothing else, `001.mp3`–`255.mp3`. The
+firmware asks for "folder 01, track 3" (`DF_playFolder()`, command `0x0F`) and
+the module plays `/01/003.mp3`:
+
+```
+/01/001.mp3     retro-alarm.wav
+/01/002.mp3     phony-buzzing-alarm-fx_99bpm.wav
+...
+```
+
+The bare numbers say nothing about which sound is which, so the script prints
+the mapping as it writes the card.
+
+Which number is which sound is `SOUNDS[]` in [alarm_sounds.c](src/alarm_sounds.c),
+and nowhere else. [tools/make_sd_card.py](tools/make_sd_card.py) reads that
+table and writes [sfx/](sfx/) onto a FAT16/FAT32 card (32 GB at most) to match.
+
+**The sounds go on the card as MP3, not WAV.** The sources in `sfx/` are WAV and
+stay that way, but the script converts each one with ffmpeg as it writes it. On
+this radio's module a WAV "played" for its full length — the module confirmed
+it was playing, and the pass took exactly the file's duration — in complete
+silence, while MP3s played fine. The datasheet lists MP3 (and WMA) decoding and
+never mentions WAV. The MP3s are the plainest
+kind there is: constant 128 kbps, 44.1 kHz stereo, no ID3 tags, no VBR header.
+
+The script also replaces any other file claiming one of our numbers — such as
+`001-retro-alarm.wav` from an older layout — and removes
+macOS `._` and `.DS_Store` files, which the module can mistake for tracks.
+`ffmpeg` must be installed.
+
+```sh
+python3 tools/make_sd_card.py /media/$USER/SDCARD
+```
+
+To add a sound, put it in `sfx/`, add a line to `SOUNDS[]`, rebuild, and rerun
+the script.
+
+### The player
+DFRobot's driver ([components/DFRobotDFPlayerMini](components/DFRobotDFPlayerMini),
+vendored from the DFPlayer-test project) is a port of their Arduino library and
+keeps its habits: all of its state is global, it **busy-waits** for each
+acknowledgement, and its serial layer hands every transmission back to whichever
+task started the UART. So [audio_player.c](src/audio_player.c) gives it one task
+of its own, at priority 1, which makes every `DF_*` call; everyone else posts
+requests to a queue. Resetting the module blocks that task for about two
+seconds, which costs nothing anyone else wanted.
+
+The sound loops by being restarted each time a pass ends. With BUSY wired, a
+pass has ended when BUSY has gone low since the start and is high again. Without
+it, the firmware falls back to the module's serial "finished" message, which
+arrives **twice** for every track, so a finish within a second of a start is
+ignored as the echo. A missing track or a pulled card stops the loop
+rather than retrying it for five minutes.
+
+Because "the module accepted the command" and "sound is coming out" are
+different things, the log reports what the module itself says:
+
+```
+I audio: DFPlayer online on TX 17 / RX 18: volume 20 of 30 (asked for 20), 5 file(s) in /01
+I audio: BUSY on GPIO 3 reads idle, as it should
+I audio: BUSY confirms /01/001 is playing
+I audio: first pass of /01/001 finished after 4023 ms (BUSY went high); looping
+```
+
+No files in `/01` means the card layout is wrong. "NOT playing" a moment after
+the start, or a first pass that finishes in a fraction of the sound's length,
+means the file is in a form the module cannot decode. A confirmed play that
+runs the right length with no sound is the WAV failure described above — or, with
+an MP3, the speaker wiring or the volume.
+
+The library's queries take *whatever message is waiting* as their answer, so
+one stray message leaves every later answer one behind — which is how the
+volume once read `-1` and the file count read back as the volume. Each query is
+preceded by a short pause and a drain of anything pending for that reason.
+
+No player is not a fault. It is retried every `DFPLAYER_RETRY_S` and whenever
+the alarm goes off; until it answers, the alarm is silent and the log says why.
 
 ## Status screen
 A diagnostics screen: what the radio joined, what it answers on, what it
@@ -605,7 +803,7 @@ Two things about last wills that are easy to be caught by:
   is a couple of two-byte packets a minute.
 
 ### Changing parameters over MQTT
-Ten build flags can be changed without a reflash, each with a `get` topic the
+Thirteen parameters can be changed without a reflash, each with a `get` topic the
 device publishes to and a `set` topic it listens on:
 
 ```
@@ -613,9 +811,9 @@ homeassistant/<number|text|switch>/<WIFI_HOSTNAME>/<PARAM>/<get|set>
 ```
 
 The component in the second position follows the parameter's type — `number`
-for the numeric ones, `text` for the alphanumeric. `switch` is in the scheme
-for a boolean, of which there are none yet; adding one is a line in `TABLE[]`
-in [settings.c](src/settings.c) and the topic falls out of it.
+for the numeric ones, `text` for the alphanumeric, `switch` for the one
+boolean, `ALARM_ENABLED`. Adding a parameter is a line in `TABLE[]` in
+[settings.c](src/settings.c) and the topics fall out of it.
 
 Update a parameter:
 ```sh
@@ -643,7 +841,8 @@ remember when a changed build flag appears to do nothing: the stored value wins
 until it is reset.
 
 ### Two kinds of parameter
-The five above are **live**: a new value is adopted as it arrives. Five more are
+The first eight — the five above and the three [alarm](#alarm) parameters — are
+**live**: a new value is adopted as it arrives. Five more are
 **boot settings** — `WIFI_SSID`, `WIFI_PASSWORD`, `MQTT_BROKER_URI`,
 `MQTT_USERNAME`, `MQTT_PASSWORD` — and those are only written down. They are
 picked up at the next start.

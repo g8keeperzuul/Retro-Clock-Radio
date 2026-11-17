@@ -26,7 +26,7 @@ extern "C" {
 /*
  * Two kinds, and the difference matters at every call site below.
  *
- * The first five are LIVE: a new value is adopted the moment it arrives, and
+ * The first eight are LIVE: a new value is adopted the moment it arrives, and
  * what is stored is also what is running.
  *
  * The rest are BOOT settings -- the credentials and addresses needed to reach
@@ -43,6 +43,18 @@ typedef enum {
     SETTING_TIMEZONE,
     SETTING_API_KEY,
     SETTING_MQTT_INTERVAL,
+
+    /*
+     * The alarm. ALARM_TIME is "HH:MM" on a 24-hour clock, or empty for no
+     * alarm -- and unlike every other parameter, a value that does not parse
+     * is not rejected but taken to mean "no alarm". ALARM_ENABLED is "ON" or
+     * "OFF", and is what the knob's button flips on the alarm screen; it is
+     * held OFF while there is no alarm time, and a set of ON is rejected.
+     * ALARM_SOUND is a file name from alarm_sounds.c.
+     */
+    SETTING_ALARM_TIME,
+    SETTING_ALARM_ENABLED,
+    SETTING_ALARM_SOUND,
 
     SETTING_WIFI_SSID,
     SETTING_WIFI_PASSWORD,
@@ -89,10 +101,17 @@ bool settings_takes_effect_on_reboot(setting_id_t id);
 /* The current value as a whole number. Zero for a parameter that is not one. */
 int32_t settings_get_int(setting_id_t id);
 
+/* Whether a "switch" parameter is "ON". False for anything else. */
+bool settings_get_bool(setting_id_t id);
+
 /*
  * Validate, store and apply. Returns ESP_ERR_INVALID_ARG when the value does
  * not pass, leaving the old one in place, and ESP_OK when it took -- including
  * when it was already the value, which is not an error worth distinguishing.
+ *
+ * Some parameters are put into a canonical form first: "7:30:00" becomes
+ * "07:30", "on" becomes "ON". For ALARM_TIME anything that does not parse
+ * becomes empty, which clears the alarm and returns ESP_OK.
  */
 esp_err_t settings_set(setting_id_t id, const char *value);
 

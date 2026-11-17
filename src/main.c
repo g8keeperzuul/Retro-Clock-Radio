@@ -5,10 +5,12 @@
  *   - ESP32-S3-DevKitC-1 v1.1 (N16R8: 16 MB flash, 8 MB PSRAM)
  *   - Waveshare 5.83" e-paper (G) display, 648x480, four colour, SPI
  *   - Adafruit I2C STEMMA QT rotary encoder breakout, for choosing a screen
+ *   - DFRobot DFPlayer Mini on UART1, for the alarm
  *
  * This stage bootstraps the microcontroller, joins the Wi-Fi network configured
  * in platformio.ini, sets the real-time clock from NTP, and hands the e-paper
- * panel to the screen manager. Turning the knob walks the ring of screens.
+ * panel to the screen manager. Turning the knob walks the ring of screens;
+ * pressing it silences the alarm, or on the alarm screen switches it on and off.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -25,6 +27,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "alarm.h"
+#include "audio_player.h"
 #include "clock_display.h"
 #include "epd_5in83g.h"
 #include "epd_clockface.h"
@@ -51,6 +55,15 @@ static const char *TAG = "main";
 #ifndef BOOT_LOG_DELAY_MS
 #define BOOT_LOG_DELAY_MS 5000
 #endif
+
+/*
+ * Longest boot will wait for the audio test: the test's own cap, plus time for
+ * the player's reset and its first queries. Must agree with audio_player.c.
+ */
+#ifndef AUDIO_BOOT_TEST_MAX_S
+#define AUDIO_BOOT_TEST_MAX_S 30
+#endif
+#define AUDIO_BOOT_TEST_WAIT_MS ((AUDIO_BOOT_TEST_MAX_S + 10) * 1000)
 
 static void log_boot_banner(void)
 {
@@ -103,6 +116,21 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(BOOT_LOG_DELAY_MS));
 
     log_boot_banner();
+
+    /*
+     * The player first of all, so the boot audio test (AUDIO_BOOT_TEST) plays
+     * while nothing else has been started -- no settings, no panel, no Wi-Fi. The
+     * player is brought up in the background, since resetting it takes a
+     * couple of seconds and it may not be fitted; with the test built in,
+     * boot waits here for it to finish. Without it, this returns at once.
+     */
+    const esp_err_t audio_err = audio_player_start();
+    if (audio_err != ESP_OK) {
+        ESP_LOGW(TAG, "no audio: %s -- the alarm will be silent",
+                 esp_err_to_name(audio_err));
+    } else {
+        audio_player_wait_boot_test(AUDIO_BOOT_TEST_WAIT_MS);
+    }
 
     /*
      * The refresh counter goes first, so it can hook the panel driver before
@@ -170,6 +198,12 @@ void app_main(void)
     }
 
     /*
+     * The alarm needs neither the panel nor the network -- only a clock, and it
+     * waits for that by itself. The player was started before the network.
+     */
+    ESP_ERROR_CHECK(alarm_start());
+
+    /*
      * The content tasks first, then the manager that arbitrates between them.
      * Neither draws anything on its own; both are started whether or not the
      * network came up, since each has something to put up while it waits.
@@ -189,16 +223,21 @@ void app_main(void)
         }
 
         ESP_ERROR_CHECK(screen_manager_start(SCREEN_CLOCK));
+    }
 
-        /*
-         * No knob fitted is not a fault: the screens still change themselves,
-         * there is just no way to choose between them.
-         */
-        const esp_err_t enc_err = rotary_encoder_start(screen_manager_step);
-        if (enc_err != ESP_OK) {
-            ESP_LOGW(TAG, "no rotary encoder: %s -- screens cannot be switched",
-                     esp_err_to_name(enc_err));
-        }
+    /*
+     * Outside the panel's block: without a panel there are no screens to walk,
+     * but the button is still the way to silence the alarm, and a turn is
+     * simply ignored by a screen manager that never started.
+     *
+     * No knob fitted is not a fault: the screens still change themselves,
+     * there is just no way to choose between them.
+     */
+    const esp_err_t enc_err = rotary_encoder_start(screen_manager_step,
+                                                   alarm_button_pressed);
+    if (enc_err != ESP_OK) {
+        ESP_LOGW(TAG, "no rotary encoder: %s -- screens cannot be switched",
+                 esp_err_to_name(enc_err));
     }
 
     while (true) {

@@ -4,6 +4,7 @@
 #include "screen_manager.h"
 
 #include "clock_display.h"
+#include "epd_alarm.h"
 #include "epd_status.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -97,6 +98,7 @@ static const struct {
     screen_id_t then;
 } SCREENS[SCREEN_COUNT] = {
     [SCREEN_CLOCK]    = {"clock",    clock_display_draw,            1, 1, 0},  /* yellow */
+    [SCREEN_ALARM]    = {"alarm",    epd_alarm_show,                1, 0, 0},  /* red    */
     [SCREEN_WEATHER]  = {"weather",  weather_display_draw,          0, 0, 1},  /* blue   */
     [SCREEN_FORECAST] = {"forecast", weather_display_draw_forecast, 0, 1, 1},  /* cyan   */
     [SCREEN_STATUS]   = {"status",   epd_status_show,               1, 0, 1},  /* violet */                         
@@ -155,9 +157,9 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 /*
  * Where the dial is pointing, 0 to ENC_POSITIONS - 1.
  *
- * The encoder has twenty detents to a revolution and the ring has four screens,
- * so a screen is five detents wide and one turn of the knob walks the lot
- * exactly once. Turning within a screen's own five changes nothing, which is
+ * The encoder has twenty detents to a revolution and the ring has five screens,
+ * so a screen is four detents wide and one turn of the knob walks the lot
+ * exactly once. Turning within a screen's own four changes nothing, which is
  * the point: the dial has somewhere to be, rather than every click moving the
  * panel.
  *
@@ -530,9 +532,10 @@ static void screen_task(void *arg)
 
 /*
  * A parameter has moved, so whatever was drawn using it is out of date. The
- * status screen shows all five; the clock shows the timezone by way of the
- * hands. Marking them stale rather than redrawing goes through the same path
- * as any other content change, which means the panel's floor still applies.
+ * status screen shows the first five; the clock shows the timezone by way of
+ * the hands; the alarm screen shows the three alarm settings and nothing else.
+ * Marking them stale rather than redrawing goes through the same path as any
+ * other content change, which means the panel's floor still applies.
  */
 static void on_setting_changed(setting_id_t id)
 {
@@ -542,6 +545,12 @@ static void on_setting_changed(setting_id_t id)
      * twenty-five second refresh to change nothing.
      */
     if (settings_takes_effect_on_reboot(id)) {
+        return;
+    }
+
+    if (id == SETTING_ALARM_TIME || id == SETTING_ALARM_ENABLED ||
+        id == SETTING_ALARM_SOUND) {
+        screen_manager_content_changed(SCREEN_ALARM);
         return;
     }
 
