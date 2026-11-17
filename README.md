@@ -1,4 +1,30 @@
 # Retro Clock-Radio
+This retro clock is modelled after a [General Electric C437A Radio](https://www.radiomuseum.org/r/general_el_c437a.html) from 1959.
+![GE C437A](./docs/pictures/GE_C437A.png)
+![Clock front](./docs/pictures/front-clock-web.jpg)
+Sixty-five years of technological innovation (microcontrollers, 3D FDM printing, wifi, etc) hidden behind a mid-century facade. 
+![Internals](/docs/pictures/back-open-web.jpg)
+![Back cover](./docs/pictures/back-web.jpg)
+
+## Operation
+
+The radio tuner dial is the function selector. 
+Since there are five functions and 20 notches on the rotary encoder, each screen has a contiguous 4 notches assigned. The icons on the dial ring is used to indicate the currently selected function. See [Choosing a screen](#choosing-a-screen)
+
+<p float="left">
+<img width="33%" src="./docs/pictures/front-clock-web.jpg" />
+<img width="33%" src="./docs/pictures/front-forecast-web.jpg" />
+<img width="33%" src="./docs/pictures/front-weather-web.jpg" />
+</p>
+
+<p float="left">
+<img width="24%" src="./docs/pictures/hclock.png" />
+<img width="24%" src="./docs/pictures/forecast.png" />
+<img width="24%" src="./docs/pictures/alarm.png" />
+<img width="24%" src="./docs/pictures/status.png" />
+</p>
+<img width="97%" src="./docs/pictures/anglesc.png" />
+
 
 ## Component List
 | Part | Notes |
@@ -12,10 +38,19 @@
 | 1000 uF + 0.1 uF / 100nF capacitors | Across 5V + GRD rails of DFPlayer to handle playback power spikes. | 
 
 ## Wiring
-Every pin is a `build_flag` in [platformio.ini](platformio.ini) — rewire freely
+Every pin is a `build_flag` in [platformio.ini](platformio.ini.default) — rewire freely
 and update the flags to match.
 
+<p float="left">
+<img width="41%" src="./docs/pictures/connection-diagram-web.jpg" />
+<img width="55%" src="./docs/pictures/ESP32-S3_DevKitC-1.png" />
+</p>
+
 ### E-paper panel
+The 4-color e-Paper panel has a long refresh time of about 25 seconds, where as the black-and-white version refresh time is much lower at about 5 seconds. 
+This project uses the 4-color display, but I would recommend the quicker refresh display. 
+Due to the strongly suggested idle time of 3 minutes between screen updates, the program enforces a delay between successive updates to guard against abuse. This delay resulted in the addition of a [LED countdown strip](#the-countdown-strip) of 6 RGB lights that count down until the next permitted screen refresh. These indicator lights serve as the visual notification of a pending screen update.  
+
 Defaults follow Waveshare's own ESP32-S3 reference wiring.
 
 This panel's interface is **nine** wires, not the usual eight — `PWR` is a
@@ -128,14 +163,28 @@ like a module that is not there. The log says which pins it tried; the
 [DFPlayer-test](../DFPlayer-test) project has a UART self-test for proving the
 wiring on its own.
 
-Pins to leave alone on this board: 19/20 are native USB, 43/44 the console UART,
-26–32 the internal flash, 33–37 the PSRAM on an N16R8 module, and 0, 3, 45 and
-46 are strapping pins.
+### Capacitors
+These were added after some testing, particularly to the audio player module. The parallel large and small capacitors straddle the power and ground pins of the DFPlayerMini module specifically to absorb power demand spikes.
+The same is true of the single capacitor on the two-pin e-Paper display power connector. 
+
+![audio capacitors](./docs/pictures/capacitors-web.jpg)
 
 ### KiCad
 
 [Espressif libraries for KiCad](https://github.com/espressif/kicad-libraries)
+Notice the need for a second layer (see blue traces). These were implemented as patch wires soldered to the board.
+<p float="left">
+<img width="33%" src="./docs/pcb/pcb-layers.png" />
+<img width="33%" src="./docs/pictures/populated-pcb-top-web.jpg" />
+<img width="33%" src="./docs/pictures/populated-pcb-bottom-web.jpg" />
+</p>
 
+![Printed mask](./docs/pictures/pcb-mask-web.jpg)
+PDFs of PCB Mask:
+
+[Mask - positive](./docs/pcb/retro-clock-schematic.pdf)
+
+[Mask - negative](./docs/pcb/retro_clock-rev.pdf) - what you want to use for UV-sensitive film
 
 ## Configuration
 Wi-Fi credentials and connection tuning are compile-time parameters, defined as
