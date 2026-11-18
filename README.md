@@ -177,7 +177,7 @@ The same is true of the single capacitor on the two-pin e-Paper display power co
 
 [Download KiCad project (ZIP)](./docs/pcb/retro-clock-kicad.zip)
 
-Notice below the need for a second layer (see blue traces). These were implemented as patch wires soldered to the board.
+Notice below the need for a second layer (see blue traces). These were implemented as patch wires soldered to the board. So the blue traces are on the 'top' and the red traces (not pictured) are on the underside.
 
 <p float="left">
 <img width="33%" src="./docs/pcb/pcb-layers.png" />
@@ -519,8 +519,10 @@ The hands follow the pair in the photograph: solid black tapered wedges, broad
 at the boss and narrowing to a blunt tip, with the boss drawn over both. No
 second hand — see the cadence below for why there could not be one.
 
-![real clock](./docs/pictures/clock-face.png)
-![clock](./docs/pictures/hclock.png)
+<p align="left">
+<img width="49%" src="./docs/pictures/clock-face.png" />
+<img width="46%" src="./docs/pictures/hclock.png" />
+</p>
 
 #### Type
 Both screens set type from `fonts/Aesthetic Rigelsia Free.ttf`, rasterised to
@@ -1315,3 +1317,18 @@ after dark, a polar day with no sunrise, and a 401 body. The awkward cases need
 no fake clock: the aggregator takes the day boundaries as arguments, so a test
 poses "booted at eight in the evening" by passing different numbers.
 
+## 3D Model - STL files
+
+<p align="left">
+<img width="20%" src="./docs/pictures/stl/Retro-radio-shell.png" />
+<img width="20%" src="./docs/pictures/stl/Retro-radio-inside.png" />
+<img width="20%" src="./docs/pictures/stl/Retro-radio-back.png" />
+<img width="19%" src="./docs/pictures/stl/Retro-radio-tuner.png" />
+<img width="19%" src="./docs/pictures/stl/Retro-radio-internal-brackets.png" />
+</p>
+<p align="left">
+<img width="60%" src="./docs/pictures/stl/Retro-radio-top-cutaway.png" />
+<img width="34%" src="./docs/pictures/stl/Retro-radio-side-cutaway.png" />
+</p>
+
+[Download STL Models (ZIP)](./stl/GE%20C-438B%20Radio%20STLs.zip)
